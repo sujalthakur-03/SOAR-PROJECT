@@ -79,7 +79,7 @@ export function TopBar({ isConnected }: TopBarProps) {
           <DropdownMenuContent align="end" className="w-48">
             <div className="px-2 py-1.5">
               <p className="text-sm font-medium">{user?.user_metadata?.full_name || 'SOC Analyst'}</p>
-              <p className="text-xs text-muted-foreground">{user?.email || 'analyst@cybersentinel.io'}</p>
+              <p className="text-xs text-muted-foreground">@{user?.user_metadata?.username || 'analyst'}</p>
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem>
