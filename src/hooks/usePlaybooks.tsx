@@ -84,3 +84,67 @@ export const useDeletePlaybook = () => {
     },
   });
 };
+
+export const useCreatePlaybook = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (data: {
+      name: string;
+      description: string;
+      trigger: Record<string, unknown>;
+      steps: Record<string, unknown>[];
+    }) => {
+      const playbookId = `PB-${Date.now()}`;
+      const { error } = await supabase
+        .from('playbooks')
+        .insert([{
+          playbook_id: playbookId,
+          name: data.name,
+          description: data.description,
+          trigger: data.trigger as unknown as Database['public']['Tables']['playbooks']['Insert']['trigger'],
+          steps: data.steps as unknown as Database['public']['Tables']['playbooks']['Insert']['steps'],
+        }]);
+      
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['playbooks'] });
+    },
+  });
+};
+
+export const useUpdatePlaybook = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: {
+        name: string;
+        description: string;
+        trigger: Record<string, unknown>;
+        steps: Record<string, unknown>[];
+      };
+    }) => {
+      const { error } = await supabase
+        .from('playbooks')
+        .update({
+          name: data.name,
+          description: data.description,
+          trigger: data.trigger as unknown as Database['public']['Tables']['playbooks']['Update']['trigger'],
+          steps: data.steps as unknown as Database['public']['Tables']['playbooks']['Update']['steps'],
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+      
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['playbooks'] });
+    },
+  });
+};

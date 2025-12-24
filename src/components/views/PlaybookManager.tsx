@@ -28,31 +28,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import { SeverityBadge } from '@/components/common/StatusBadges';
 import { TimeAgo } from '@/components/common/TimeDisplay';
-import { usePlaybooks, useTogglePlaybook, useDeletePlaybook, type Playbook } from '@/hooks/usePlaybooks';
+import { 
+  usePlaybooks, 
+  useTogglePlaybook, 
+  useDeletePlaybook, 
+  useCreatePlaybook,
+  type Playbook 
+} from '@/hooks/usePlaybooks';
 import { useUserRole } from '@/hooks/useUserRole';
 import { canEditFeature, canDeleteFeature } from '@/lib/permissions';
 import { useToast } from '@/hooks/use-toast';
 import type { StepType, Severity } from '@/types/soar';
 import { cn } from '@/lib/utils';
+import { VisualPlaybookEditor } from '@/components/playbook-editor/VisualPlaybookEditor';
 
 const stepTypeIcons: Record<StepType, React.ElementType> = {
   enrichment: FlaskConical,
@@ -74,11 +64,12 @@ export function PlaybookManager() {
   const { data: playbooks = [], isLoading } = usePlaybooks();
   const togglePlaybook = useTogglePlaybook();
   const deletePlaybook = useDeletePlaybook();
+  const createPlaybook = useCreatePlaybook();
   const { role } = useUserRole();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPlaybook, setSelectedPlaybook] = useState<Playbook | null>(null);
-  const [isBuilderOpen, setIsBuilderOpen] = useState(false);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
 
   const canEdit = canEditFeature('playbooks', role);
   const canDelete = canDeleteFeature('playbooks', role);
@@ -107,11 +98,41 @@ export function PlaybookManager() {
     }
   };
 
+  const handleSavePlaybook = async (data: {
+    name: string;
+    description: string;
+    trigger: Record<string, unknown>;
+    steps: Record<string, unknown>[];
+  }) => {
+    try {
+      await createPlaybook.mutateAsync(data);
+      toast({ title: 'Playbook created successfully' });
+      setIsEditorOpen(false);
+      setSelectedPlaybook(null);
+    } catch (error) {
+      toast({ title: 'Failed to create playbook', variant: 'destructive' });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
+    );
+  }
+
+  // Show visual editor when open
+  if (isEditorOpen || selectedPlaybook) {
+    return (
+      <VisualPlaybookEditor
+        playbook={selectedPlaybook}
+        onSave={handleSavePlaybook}
+        onClose={() => {
+          setIsEditorOpen(false);
+          setSelectedPlaybook(null);
+        }}
+      />
     );
   }
 
@@ -129,7 +150,7 @@ export function PlaybookManager() {
           </p>
         </div>
         {canEdit && (
-          <Button onClick={() => setIsBuilderOpen(true)}>
+          <Button onClick={() => setIsEditorOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             New Playbook
           </Button>
@@ -284,143 +305,6 @@ export function PlaybookManager() {
           })}
         </div>
       )}
-
-      {/* Playbook Builder Dialog */}
-      <PlaybookBuilderDialog
-        open={isBuilderOpen || !!selectedPlaybook}
-        onOpenChange={(open) => {
-          setIsBuilderOpen(open);
-          if (!open) setSelectedPlaybook(null);
-        }}
-        playbook={selectedPlaybook}
-      />
     </div>
-  );
-}
-
-interface PlaybookBuilderDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  playbook?: Playbook | null;
-}
-
-function PlaybookBuilderDialog({
-  open,
-  onOpenChange,
-  playbook,
-}: PlaybookBuilderDialogProps) {
-  const isEditing = !!playbook;
-  const trigger = playbook?.trigger as { source?: string; rule_ids?: string[]; severity_threshold?: string } | undefined;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>
-            {isEditing ? 'Edit Playbook' : 'Create New Playbook'}
-          </DialogTitle>
-          <DialogDescription>
-            Configure trigger conditions and response steps
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-6 py-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Playbook Name</Label>
-              <Input
-                placeholder="e.g., SSH Brute Force Response"
-                defaultValue={playbook?.name}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Source</Label>
-              <Select defaultValue={trigger?.source || 'wazuh'}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="wazuh">Wazuh</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Description</Label>
-            <Textarea
-              placeholder="Describe what this playbook does..."
-              defaultValue={playbook?.description || ''}
-            />
-          </div>
-
-          <div className="space-y-4">
-            <h4 className="font-medium text-sm flex items-center gap-2">
-              <Zap className="h-4 w-4 text-primary" />
-              Trigger Configuration
-            </h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Rule IDs (comma-separated)</Label>
-                <Input
-                  placeholder="100002, 100003"
-                  defaultValue={trigger?.rule_ids?.join(', ') || ''}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Minimum Severity</Label>
-                <Select defaultValue={trigger?.severity_threshold || 'high'}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="critical">Critical</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="low">Low</SelectItem>
-                    <SelectItem value="info">Info</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium text-sm flex items-center gap-2">
-                <GitBranch className="h-4 w-4 text-primary" />
-                Response Steps
-              </h4>
-              <Button variant="outline" size="sm">
-                <Plus className="h-3 w-3 mr-1" />
-                Add Step
-              </Button>
-            </div>
-
-            {!playbook?.steps || (playbook.steps as unknown[]).length === 0 ? (
-              <div className="border border-dashed border-border rounded-lg p-8 text-center text-muted-foreground">
-                <p className="text-sm">No steps configured yet</p>
-                <p className="text-xs mt-1">Add steps to define the response workflow</p>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {(playbook.steps as unknown[]).length} steps configured
-              </p>
-            )}
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button variant="secondary">
-            <FlaskConical className="h-4 w-4 mr-2" />
-            Simulate
-          </Button>
-          <Button>{isEditing ? 'Save Changes' : 'Create Playbook'}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
