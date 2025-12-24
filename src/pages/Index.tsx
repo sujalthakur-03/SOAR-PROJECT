@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppSidebar } from '@/components/layout/AppSidebar';
 import { TopBar } from '@/components/layout/TopBar';
 import { AlertsDashboard } from '@/components/views/AlertsDashboard';
@@ -8,6 +8,8 @@ import { ApprovalConsole } from '@/components/views/ApprovalConsole';
 import { ConnectorStatus } from '@/components/views/ConnectorStatus';
 import { AuditLog } from '@/components/views/AuditLog';
 import { MetricsDashboard } from '@/components/views/MetricsDashboard';
+import { useUserRole } from '@/hooks/useUserRole';
+import { canViewFeature } from '@/lib/permissions';
 
 const viewComponents: Record<string, React.ComponentType> = {
   alerts: AlertsDashboard,
@@ -20,7 +22,22 @@ const viewComponents: Record<string, React.ComponentType> = {
 };
 
 const Index = () => {
+  const { role } = useUserRole();
   const [activeView, setActiveView] = useState('alerts');
+
+  // Reset to a valid view if current view is not accessible
+  useEffect(() => {
+    if (role && !canViewFeature(activeView, role)) {
+      // Find the first accessible view
+      const accessibleView = Object.keys(viewComponents).find(view => 
+        canViewFeature(view, role)
+      );
+      if (accessibleView) {
+        setActiveView(accessibleView);
+      }
+    }
+  }, [role, activeView]);
+
   const ActiveComponent = viewComponents[activeView] || AlertsDashboard;
 
   return (
