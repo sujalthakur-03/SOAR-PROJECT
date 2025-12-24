@@ -5,11 +5,11 @@ import {
   Play,
   Eye,
   Filter,
-  ChevronDown,
   ExternalLink,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -36,15 +36,23 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { SeverityBadge } from '@/components/common/StatusBadges';
 import { TimeAgo } from '@/components/common/TimeDisplay';
-import { mockAlerts } from '@/data/mockData';
-import type { Alert, Severity } from '@/types/soar';
+import { useAlerts, useUpdateAlertStatus, type Alert } from '@/hooks/useAlerts';
+import type { Severity } from '@/types/soar';
 import { cn } from '@/lib/utils';
+import { useUserRole } from '@/hooks/useUserRole';
+import { canEditFeature } from '@/lib/permissions';
+import { useToast } from '@/hooks/use-toast';
 
 export function AlertsDashboard() {
-  const [alerts] = useState<Alert[]>(mockAlerts);
+  const { data: alerts = [], isLoading, refetch } = useAlerts();
+  const updateStatus = useUpdateAlertStatus();
+  const { role } = useUserRole();
+  const { toast } = useToast();
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  const canEdit = canEditFeature('alerts', role);
 
   const filteredAlerts = alerts.filter((alert) => {
     if (severityFilter !== 'all' && alert.severity !== severityFilter) return false;
@@ -59,6 +67,23 @@ export function AlertsDashboard() {
     low: alerts.filter((a) => a.severity === 'low').length,
   };
 
+  const handleStatusChange = async (alertId: string, status: Alert['status']) => {
+    try {
+      await updateStatus.mutateAsync({ id: alertId, status });
+      toast({ title: 'Alert status updated' });
+    } catch (error) {
+      toast({ title: 'Failed to update status', variant: 'destructive' });
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -69,7 +94,7 @@ export function AlertsDashboard() {
             Live Alerts
           </h2>
           <p className="text-muted-foreground text-sm mt-1">
-            Real-time alerts from Wazuh detection engine
+            Real-time alerts from detection engine
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -78,9 +103,9 @@ export function AlertsDashboard() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-status-success opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-status-success" />
             </span>
-            Streaming
+            Live
           </div>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
@@ -169,86 +194,105 @@ export function AlertsDashboard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredAlerts.map((alert) => (
-                <TableRow key={alert.id} className="table-row-interactive">
-                  <TableCell>
-                    <SeverityBadge severity={alert.severity} />
-                  </TableCell>
-                  <TableCell>
-                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
-                      {alert.rule_id}
-                    </code>
-                  </TableCell>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium text-sm">{alert.rule_name}</p>
-                      <p className="text-xs text-muted-foreground truncate max-w-md">
-                        {alert.description}
-                      </p>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-sm">{alert.agent_name}</span>
-                  </TableCell>
-                  <TableCell>
-                    {alert.mitre_technique && (
-                      <Badge variant="outline" className="text-xs">
-                        {alert.mitre_technique}
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn('text-xs capitalize', {
-                        'border-status-pending text-status-pending':
-                          alert.status === 'new',
-                        'border-status-warning text-status-warning':
-                          alert.status === 'acknowledged',
-                        'border-status-running text-status-running':
-                          alert.status === 'in_progress',
-                        'border-status-success text-status-success':
-                          alert.status === 'resolved',
-                      })}
-                    >
-                      {alert.status.replace('_', ' ')}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <TimeAgo date={alert.timestamp} className="text-xs" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="icon" className="h-7 w-7">
-                        <Play className="h-3.5 w-3.5" />
-                      </Button>
-                      <Sheet>
-                        <SheetTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => setSelectedAlert(alert)}
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                          </Button>
-                        </SheetTrigger>
-                        <SheetContent className="w-[500px] sm:max-w-[500px] overflow-y-auto">
-                          <SheetHeader>
-                            <SheetTitle className="flex items-center gap-2">
-                              <SeverityBadge severity={alert.severity} />
-                              <span className="font-mono text-sm">
-                                {alert.id}
-                              </span>
-                            </SheetTitle>
-                          </SheetHeader>
-                          <AlertDetail alert={alert} />
-                        </SheetContent>
-                      </Sheet>
-                    </div>
+              {filteredAlerts.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                    No alerts found
                   </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                filteredAlerts.map((alert) => (
+                  <TableRow key={alert.id} className="table-row-interactive">
+                    <TableCell>
+                      <SeverityBadge severity={alert.severity} />
+                    </TableCell>
+                    <TableCell>
+                      <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                        {alert.ruleId}
+                      </code>
+                    </TableCell>
+                    <TableCell>
+                      <div>
+                        <p className="font-medium text-sm">{alert.ruleName}</p>
+                        <p className="text-xs text-muted-foreground truncate max-w-md">
+                          {alert.description}
+                        </p>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm">{alert.agentName}</span>
+                    </TableCell>
+                    <TableCell>
+                      {alert.mitreTechnique && (
+                        <Badge variant="outline" className="text-xs">
+                          {alert.mitreTechnique}
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {canEdit ? (
+                        <Select
+                          value={alert.status}
+                          onValueChange={(value) => handleStatusChange(alert.id, value as Alert['status'])}
+                        >
+                          <SelectTrigger className="h-7 w-28 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="new">New</SelectItem>
+                            <SelectItem value="acknowledged">Acknowledged</SelectItem>
+                            <SelectItem value="in_progress">In Progress</SelectItem>
+                            <SelectItem value="resolved">Resolved</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className={cn('text-xs capitalize', {
+                            'border-status-pending text-status-pending': alert.status === 'new',
+                            'border-status-warning text-status-warning': alert.status === 'acknowledged',
+                            'border-status-running text-status-running': alert.status === 'in_progress',
+                            'border-status-success text-status-success': alert.status === 'resolved',
+                          })}
+                        >
+                          {alert.status.replace('_', ' ')}
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <TimeAgo date={alert.timestamp} className="text-xs" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7">
+                          <Play className="h-3.5 w-3.5" />
+                        </Button>
+                        <Sheet>
+                          <SheetTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => setSelectedAlert(alert)}
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </Button>
+                          </SheetTrigger>
+                          <SheetContent className="w-[500px] sm:max-w-[500px] overflow-y-auto">
+                            <SheetHeader>
+                              <SheetTitle className="flex items-center gap-2">
+                                <SeverityBadge severity={alert.severity} />
+                                <span className="font-mono text-sm">{alert.alertId}</span>
+                              </SheetTitle>
+                            </SheetHeader>
+                            <AlertDetail alert={alert} />
+                          </SheetContent>
+                        </Sheet>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>
@@ -260,65 +304,50 @@ export function AlertsDashboard() {
 function AlertDetail({ alert }: { alert: Alert }) {
   return (
     <div className="mt-6 space-y-6">
-      {/* Header Info */}
       <div>
-        <h3 className="font-semibold text-lg">{alert.rule_name}</h3>
+        <h3 className="font-semibold text-lg">{alert.ruleName}</h3>
         <p className="text-muted-foreground text-sm mt-1">{alert.description}</p>
       </div>
 
-      {/* Metadata Grid */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground uppercase tracking-wide">
-            Rule ID
-          </label>
-          <p className="font-mono text-sm">{alert.rule_id}</p>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide">Rule ID</label>
+          <p className="font-mono text-sm">{alert.ruleId}</p>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground uppercase tracking-wide">
-            Agent
-          </label>
-          <p className="text-sm">{alert.agent_name}</p>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide">Agent</label>
+          <p className="text-sm">{alert.agentName}</p>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground uppercase tracking-wide">
-            Source IP
-          </label>
-          <p className="font-mono text-sm">{alert.source_ip || 'N/A'}</p>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide">Source IP</label>
+          <p className="font-mono text-sm">{alert.sourceIp || 'N/A'}</p>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground uppercase tracking-wide">
-            Destination IP
-          </label>
-          <p className="font-mono text-sm">{alert.destination_ip || 'N/A'}</p>
+          <label className="text-xs text-muted-foreground uppercase tracking-wide">Destination IP</label>
+          <p className="font-mono text-sm">{alert.destinationIp || 'N/A'}</p>
         </div>
-        {alert.mitre_technique && (
+        {alert.mitreTechnique && (
           <>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground uppercase tracking-wide">
-                MITRE Technique
-              </label>
+              <label className="text-xs text-muted-foreground uppercase tracking-wide">MITRE Technique</label>
               <a
-                href={`https://attack.mitre.org/techniques/${alert.mitre_technique}`}
+                href={`https://attack.mitre.org/techniques/${alert.mitreTechnique}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm text-primary flex items-center gap-1 hover:underline"
               >
-                {alert.mitre_technique}
+                {alert.mitreTechnique}
                 <ExternalLink className="h-3 w-3" />
               </a>
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground uppercase tracking-wide">
-                MITRE Tactic
-              </label>
-              <p className="text-sm">{alert.mitre_tactic}</p>
+              <label className="text-xs text-muted-foreground uppercase tracking-wide">MITRE Tactic</label>
+              <p className="text-sm">{alert.mitreTactic}</p>
             </div>
           </>
         )}
       </div>
 
-      {/* Actions */}
       <div className="flex gap-2">
         <Button className="flex-1">
           <Play className="h-4 w-4 mr-2" />
@@ -329,13 +358,12 @@ function AlertDetail({ alert }: { alert: Alert }) {
         </Button>
       </div>
 
-      {/* Raw JSON */}
       <div>
         <label className="text-xs text-muted-foreground uppercase tracking-wide block mb-2">
           Raw Alert Data
         </label>
         <pre className="bg-muted p-3 rounded-md text-xs font-mono overflow-x-auto scrollbar-thin">
-          {JSON.stringify(alert.raw_data, null, 2)}
+          {JSON.stringify(alert.rawData, null, 2)}
         </pre>
       </div>
     </div>

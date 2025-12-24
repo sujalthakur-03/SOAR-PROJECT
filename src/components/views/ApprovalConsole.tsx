@@ -5,11 +5,12 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  ChevronRight,
   Shield,
+  Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
@@ -21,74 +22,67 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { SeverityBadge } from '@/components/common/StatusBadges';
 import { Countdown, TimeAgo } from '@/components/common/TimeDisplay';
-import { mockApprovals } from '@/data/mockData';
-import type { Approval } from '@/types/soar';
+import { useApprovals, useApproveAction, useRejectAction, type Approval } from '@/hooks/useApprovals';
 import { cn } from '@/lib/utils';
-import { toast } from 'sonner';
+import { useToast } from '@/hooks/use-toast';
 
 export function ApprovalConsole() {
-  const [approvals, setApprovals] = useState<Approval[]>(mockApprovals);
+  const { data: approvals = [], isLoading, refetch } = useApprovals();
+  const approveAction = useApproveAction();
+  const rejectAction = useRejectAction();
+  const { toast } = useToast();
   const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null);
   const [reason, setReason] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [actionType, setActionType] = useState<'approve' | 'reject' | null>(null);
 
   const pendingApprovals = approvals.filter((a) => a.status === 'pending');
   const processedApprovals = approvals.filter((a) => a.status !== 'pending');
 
   const handleApprove = async () => {
     if (!selectedApproval || !reason.trim()) {
-      toast.error('Reason is required');
+      toast({ title: 'Reason is required', variant: 'destructive' });
       return;
     }
-    setIsProcessing(true);
-    // Simulate API call
-    await new Promise((r) => setTimeout(r, 1000));
-    setApprovals((prev) =>
-      prev.map((a) =>
-        a.id === selectedApproval.id
-          ? {
-              ...a,
-              status: 'approved' as const,
-              decided_by: 'analyst@cybersentinel.io',
-              decided_at: new Date().toISOString(),
-              reason,
-            }
-          : a
-      )
-    );
-    setIsProcessing(false);
-    setSelectedApproval(null);
-    setReason('');
-    toast.success('Action approved');
+    try {
+      await approveAction.mutateAsync({ id: selectedApproval.id, reason });
+      toast({ title: 'Action approved' });
+      setSelectedApproval(null);
+      setReason('');
+      setActionType(null);
+    } catch (error) {
+      toast({ title: 'Failed to approve', variant: 'destructive' });
+    }
   };
 
   const handleReject = async () => {
     if (!selectedApproval || !reason.trim()) {
-      toast.error('Reason is required');
+      toast({ title: 'Reason is required', variant: 'destructive' });
       return;
     }
-    setIsProcessing(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    setApprovals((prev) =>
-      prev.map((a) =>
-        a.id === selectedApproval.id
-          ? {
-              ...a,
-              status: 'rejected' as const,
-              decided_by: 'analyst@cybersentinel.io',
-              decided_at: new Date().toISOString(),
-              reason,
-            }
-          : a
-      )
-    );
-    setIsProcessing(false);
-    setSelectedApproval(null);
-    setReason('');
-    toast.success('Action rejected');
+    try {
+      await rejectAction.mutateAsync({ id: selectedApproval.id, reason });
+      toast({ title: 'Action rejected' });
+      setSelectedApproval(null);
+      setReason('');
+      setActionType(null);
+    } catch (error) {
+      toast({ title: 'Failed to reject', variant: 'destructive' });
+    }
   };
+
+  const openDialog = (approval: Approval, type: 'approve' | 'reject') => {
+    setSelectedApproval(approval);
+    setActionType(type);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -103,12 +97,18 @@ export function ApprovalConsole() {
             Review and approve pending automated actions
           </p>
         </div>
-        {pendingApprovals.length > 0 && (
-          <Badge className="bg-status-warning/20 text-status-warning border-status-warning/30">
-            <Clock className="h-3 w-3 mr-1" />
-            {pendingApprovals.length} pending
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {pendingApprovals.length > 0 && (
+            <Badge className="bg-status-warning/20 text-status-warning border-status-warning/30">
+              <Clock className="h-3 w-3 mr-1" />
+              {pendingApprovals.length} pending
+            </Badge>
+          )}
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Pending Approvals */}
@@ -134,40 +134,24 @@ export function ApprovalConsole() {
             >
               <CardContent className="p-4">
                 <div className="flex items-start gap-4">
-                  {/* Alert Icon */}
                   <div className="flex items-center justify-center h-10 w-10 rounded-full bg-status-warning/20">
                     <AlertTriangle className="h-5 w-5 text-status-warning" />
                   </div>
 
-                  {/* Content */}
                   <div className="flex-1 min-w-0 space-y-3">
                     <div className="flex items-start justify-between">
                       <div>
-                        <h4 className="font-medium">{approval.proposed_action}</h4>
+                        <h4 className="font-medium">{approval.proposedAction}</h4>
                         <p className="text-sm text-muted-foreground">
-                          Playbook: {approval.playbook_name}
+                          Playbook: {approval.playbookName}
                         </p>
                       </div>
-                      <Countdown expiresAt={approval.expires_at} />
-                    </div>
-
-                    {/* Alert Context */}
-                    <div className="bg-card rounded-lg p-3 border border-border">
-                      <div className="flex items-center gap-3 text-sm">
-                        <SeverityBadge severity={approval.alert.severity} />
-                        <span className="font-medium">{approval.alert.rule_name}</span>
-                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
-                          {approval.alert.id}
-                        </code>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-2">
-                        {approval.alert.description}
-                      </p>
+                      <Countdown expiresAt={approval.expiresAt} />
                     </div>
 
                     {/* Action Details */}
                     <div className="flex items-center gap-4 text-xs">
-                      {Object.entries(approval.action_details).map(([key, value]) => (
+                      {Object.entries(approval.actionDetails).map(([key, value]) => (
                         <div key={key} className="flex items-center gap-1">
                           <span className="text-muted-foreground">{key}:</span>
                           <code className="bg-muted px-1.5 py-0.5 rounded">
@@ -181,7 +165,7 @@ export function ApprovalConsole() {
                     <div className="flex items-center gap-2 pt-2">
                       <Button
                         size="sm"
-                        onClick={() => setSelectedApproval(approval)}
+                        onClick={() => openDialog(approval, 'approve')}
                         className="bg-status-success hover:bg-status-success/90"
                       >
                         <CheckCircle2 className="h-4 w-4 mr-1" />
@@ -190,13 +174,10 @@ export function ApprovalConsole() {
                       <Button
                         size="sm"
                         variant="destructive"
-                        onClick={() => setSelectedApproval(approval)}
+                        onClick={() => openDialog(approval, 'reject')}
                       >
                         <XCircle className="h-4 w-4 mr-1" />
                         Reject
-                      </Button>
-                      <Button size="sm" variant="outline">
-                        View Alert
                       </Button>
                     </div>
                   </div>
@@ -228,12 +209,8 @@ export function ApprovalConsole() {
                         <XCircle className="h-5 w-5 text-status-error" />
                       )}
                       <div>
-                        <p className="text-sm font-medium">
-                          {approval.proposed_action}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {approval.playbook_name}
-                        </p>
+                        <p className="text-sm font-medium">{approval.proposedAction}</p>
+                        <p className="text-xs text-muted-foreground">{approval.playbookName}</p>
                       </div>
                     </div>
                     <div className="text-right">
@@ -248,9 +225,9 @@ export function ApprovalConsole() {
                       >
                         {approval.status}
                       </Badge>
-                      {approval.decided_at && (
+                      {approval.decidedAt && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          <TimeAgo date={approval.decided_at} />
+                          <TimeAgo date={approval.decidedAt} />
                         </p>
                       )}
                     </div>
@@ -264,11 +241,12 @@ export function ApprovalConsole() {
 
       {/* Approval/Reject Dialog */}
       <Dialog
-        open={!!selectedApproval}
+        open={!!selectedApproval && !!actionType}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedApproval(null);
             setReason('');
+            setActionType(null);
           }
         }}
       >
@@ -276,22 +254,19 @@ export function ApprovalConsole() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Shield className="h-5 w-5 text-primary" />
-              Confirm Decision
+              {actionType === 'approve' ? 'Approve Action' : 'Reject Action'}
             </DialogTitle>
             <DialogDescription>
-              You are about to approve or reject the following action. This decision
-              will be logged for audit purposes.
+              This decision will be logged for audit purposes.
             </DialogDescription>
           </DialogHeader>
 
           {selectedApproval && (
             <div className="space-y-4 py-4">
               <div className="bg-muted rounded-lg p-3">
-                <p className="font-medium text-sm">
-                  {selectedApproval.proposed_action}
-                </p>
+                <p className="font-medium text-sm">{selectedApproval.proposedAction}</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Playbook: {selectedApproval.playbook_name}
+                  Playbook: {selectedApproval.playbookName}
                 </p>
               </div>
 
@@ -312,27 +287,42 @@ export function ApprovalConsole() {
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setSelectedApproval(null)}
-              disabled={isProcessing}
+              onClick={() => {
+                setSelectedApproval(null);
+                setReason('');
+                setActionType(null);
+              }}
+              disabled={approveAction.isPending || rejectAction.isPending}
             >
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={handleReject}
-              disabled={isProcessing || !reason.trim()}
-            >
-              <XCircle className="h-4 w-4 mr-1" />
-              Reject
-            </Button>
-            <Button
-              onClick={handleApprove}
-              disabled={isProcessing || !reason.trim()}
-              className="bg-status-success hover:bg-status-success/90"
-            >
-              <CheckCircle2 className="h-4 w-4 mr-1" />
-              Approve
-            </Button>
+            {actionType === 'approve' ? (
+              <Button
+                onClick={handleApprove}
+                disabled={approveAction.isPending || !reason.trim()}
+                className="bg-status-success hover:bg-status-success/90"
+              >
+                {approveAction.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 mr-1" />
+                )}
+                Approve
+              </Button>
+            ) : (
+              <Button
+                variant="destructive"
+                onClick={handleReject}
+                disabled={rejectAction.isPending || !reason.trim()}
+              >
+                {rejectAction.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <XCircle className="h-4 w-4 mr-1" />
+                )}
+                Reject
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
