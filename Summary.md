@@ -718,4 +718,40 @@ For questions or issues, refer to:
 
 ---
 
+## 📝 Changelog
+
+### December 24, 2024
+
+#### Session Updates
+
+1. **Admin User Created**
+   - Promoted user `rootseeker@cybersentinel.local` (Sujal Thakur) to admin role
+   - User ID: `5e859b89-93b0-472b-bae8-7edc0c7184cb`
+
+2. **Connector Updates**
+   - **Added Cortex XSOAR Connector**
+     - Connector ID: `cortex-xsoar`
+     - Type: `soar`
+     - Status: `healthy`
+     - Available Actions: `create_incident`, `run_playbook`, `get_indicators`, `update_incident`
+   
+   - **Renamed Palo Alto Firewall to Generic Firewall**
+     - Changed name from "Palo Alto Firewall" to "Firewall"
+     - Updated connector ID from `firewall-01` to `firewall-generic`
+     - Purpose: Allow any firewall vendor to integrate with the platform
+
+#### Current Connectors List
+
+| Connector | Type | Status | Actions |
+|-----------|------|--------|---------|
+| AbuseIPDB | enrichment | error | check_ip, report_ip |
+| Cortex XSOAR | soar | healthy | create_incident, run_playbook, get_indicators, update_incident |
+| Email (SMTP) | notification | degraded | send_email |
+| Firewall | firewall | healthy | block_ip, unblock_ip, add_rule, remove_rule |
+| Slack Notifications | notification | healthy | send_message, create_channel, invite_user |
+| VirusTotal | enrichment | healthy | scan_hash, scan_url, scan_file |
+| Wazuh Active Response | edr | healthy | isolate_host, kill_process, collect_logs |
+
+---
+
 *This document is automatically maintained and should be updated with each significant feature addition or architectural change.*
