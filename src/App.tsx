@@ -8,6 +8,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import CaseDetailView from "@/components/views/CaseDetailView";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,22 @@ const App = () => (
             <Route path="/auth" element={<Auth />} />
             <Route
               path="/"
+              element={
+                <ProtectedRoute>
+                  <Index />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/cases/:caseId"
+              element={
+                <ProtectedRoute>
+                  <CaseDetailView />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/executions/:executionId"
               element={
                 <ProtectedRoute>
                   <Index />

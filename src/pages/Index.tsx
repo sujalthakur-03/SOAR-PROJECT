@@ -1,29 +1,41 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AppSidebar } from '@/components/layout/AppSidebar';
 import { TopBar } from '@/components/layout/TopBar';
-import { AlertsDashboard } from '@/components/views/AlertsDashboard';
+import { ExecutionsDashboard } from '@/components/views/ExecutionsDashboard';
 import { PlaybookManager } from '@/components/views/PlaybookManager';
-import { ExecutionTimeline } from '@/components/views/ExecutionTimeline';
+import { ExecutionTimeline as ExecutionTimelineEnhanced } from '@/components/views/ExecutionTimelineEnhanced';
 import { ApprovalConsole } from '@/components/views/ApprovalConsole';
-import { ConnectorStatus } from '@/components/views/ConnectorStatus';
+import { ConnectorConfig } from '@/components/views/ConnectorConfig';
 import { AuditLog } from '@/components/views/AuditLog';
 import { MetricsDashboard } from '@/components/views/MetricsDashboard';
+import CasesDashboard from '@/components/views/CasesDashboard';
+import { SettingsPage } from '@/components/views/SettingsPage';
 import { useUserRole } from '@/hooks/useUserRole';
 import { canViewFeature } from '@/lib/permissions';
 
 const viewComponents: Record<string, React.ComponentType> = {
-  alerts: AlertsDashboard,
+  executions: ExecutionTimelineEnhanced,
   playbooks: PlaybookManager,
-  executions: ExecutionTimeline,
   approvals: ApprovalConsole,
-  connectors: ConnectorStatus,
+  connectors: ConnectorConfig,
   audit: AuditLog,
   metrics: MetricsDashboard,
+  cases: CasesDashboard,
+  settings: SettingsPage,
 };
 
 const Index = () => {
   const { role } = useUserRole();
-  const [activeView, setActiveView] = useState('alerts');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialView = searchParams.get('view') || 'executions';
+  const [activeView, setActiveView] = useState(initialView);
+
+  const handleViewChange = useCallback((view: string) => {
+    setActiveView(view);
+    // Keep URL in sync so back navigation preserves view
+    setSearchParams(view === 'executions' ? {} : { view }, { replace: true });
+  }, [setSearchParams]);
 
   // Reset to a valid view if current view is not accessible
   useEffect(() => {
@@ -38,13 +50,13 @@ const Index = () => {
     }
   }, [role, activeView]);
 
-  const ActiveComponent = viewComponents[activeView] || AlertsDashboard;
+  const ActiveComponent = viewComponents[activeView] || ExecutionsDashboard;
 
   return (
     <div className="flex h-screen w-full bg-background">
-      <AppSidebar activeView={activeView} onViewChange={setActiveView} />
+      <AppSidebar activeView={activeView} onViewChange={handleViewChange} />
       <div className="flex-1 flex flex-col min-w-0">
-        <TopBar isConnected={true} />
+        <TopBar isConnected={true} onNavigate={handleViewChange} />
         <main className="flex-1 overflow-auto p-6 scrollbar-thin">
           <ActiveComponent />
         </main>

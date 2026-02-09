@@ -49,6 +49,18 @@ export const FEATURE_PERMISSIONS: Record<string, FeaturePermission> = {
     view: ['admin', 'senior_analyst', 'analyst'],
   },
   
+  // Settings - admin only
+  settings: {
+    view: ['admin'],
+    edit: ['admin'],
+  },
+
+  // Cases - all can view, senior+ can edit
+  cases: {
+    view: ['admin', 'senior_analyst', 'analyst'],
+    edit: ['admin', 'senior_analyst'],
+  },
+
   // User management - admin only
   userManagement: {
     view: ['admin'],

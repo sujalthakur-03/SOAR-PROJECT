@@ -1,0 +1,51 @@
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Build outputs (rebuilt inside Docker)
+dist
+
+# Backend (built separately with its own context)
+backend
+
+# Forwarder (not part of Docker deployment)
+forwarder
+
+# Environment files (secrets — passed via env_file in compose)
+.env
+.env.local
+.env.docker
+
+# Logs
+*.log
+logs
+
+# Git
+.git
+.gitignore
+
+# Docker files (don't copy into image)
+Dockerfile
+docker-compose.yml
+.dockerignore
+Makefile
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Agent docs (not needed in image)
+AGENT_*.md
+*.md
+!README.md
+
+# Claude project files
+.claude
+
+# Test & verification scripts
+*.sh
+coverage
+__tests__

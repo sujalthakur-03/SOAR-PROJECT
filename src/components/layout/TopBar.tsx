@@ -13,9 +13,10 @@ import { useAuth } from '@/hooks/useAuth';
 
 interface TopBarProps {
   isConnected: boolean;
+  onNavigate?: (view: string) => void;
 }
 
-export function TopBar({ isConnected }: TopBarProps) {
+export function TopBar({ isConnected, onNavigate }: TopBarProps) {
   const { user, signOut } = useAuth();
 
   const handleSignOut = async () => {
@@ -78,11 +79,11 @@ export function TopBar({ isConnected }: TopBarProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
             <div className="px-2 py-1.5">
-              <p className="text-sm font-medium">{user?.user_metadata?.full_name || 'SOC Analyst'}</p>
-              <p className="text-xs text-muted-foreground">@{user?.user_metadata?.username || 'analyst'}</p>
+              <p className="text-sm font-medium">{user?.fullName || 'SOC Analyst'}</p>
+              <p className="text-xs text-muted-foreground">@{user?.username || 'analyst'}</p>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onNavigate?.('settings')}>
               <Settings className="h-4 w-4 mr-2" />
               Settings
             </DropdownMenuItem>

@@ -12,6 +12,8 @@ import {
   ChevronRight,
   Radio,
   Lock,
+  FolderOpen,
+  Settings,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -25,13 +27,14 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { id: 'alerts', label: 'Live Alerts', icon: AlertTriangle, badge: 5, feature: 'alerts' },
+  { id: 'executions', label: 'Live Executions', icon: Radio, badge: 5, feature: 'executions' },
+  { id: 'cases', label: 'Cases', icon: FolderOpen, feature: 'cases' },
   { id: 'playbooks', label: 'Playbooks', icon: PlayCircle, feature: 'playbooks' },
-  { id: 'executions', label: 'Executions', icon: Radio, feature: 'executions' },
   { id: 'approvals', label: 'Approvals', icon: ClipboardCheck, badge: 2, feature: 'approvals' },
   { id: 'connectors', label: 'Connectors', icon: Plug, feature: 'connectors' },
   { id: 'audit', label: 'Audit Log', icon: FileText, feature: 'audit' },
   { id: 'metrics', label: 'Metrics', icon: BarChart3, feature: 'metrics' },
+  { id: 'settings', label: 'Settings', icon: Settings, feature: 'settings' },
 ];
 
 const roleLabels = {

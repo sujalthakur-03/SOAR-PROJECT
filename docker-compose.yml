@@ -1,0 +1,103 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# CyberSentinel SOAR v3.0 — Docker Compose
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Services:
+#   soar-database   — MongoDB 7.0 (persistent volume)
+#   soar-backend    — Node.js Express API + Execution Engine (port 3001)
+#   soar-frontend   — React + Vite production build (port 3000)
+#
+# NOT included:
+#   forwarder       — Runs on the Wazuh server, not in Docker
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose down
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # MongoDB — soar-database
+  # ─────────────────────────────────────────────────────────────────────────
+  soar-database:
+    image: mongo:7.0
+    container_name: soar-database
+    environment:
+      MONGO_INITDB_DATABASE: cybersentinel
+    volumes:
+      - soar-db-data:/data/db
+      - soar-db-config:/data/configdb
+    ports:
+      - "27017:27017"
+    networks:
+      - soar-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Backend API + Execution Engine — soar-backend
+  # ─────────────────────────────────────────────────────────────────────────
+  soar-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: soar-backend
+    env_file:
+      - ./backend/.env
+    environment:
+      # Override MongoDB to point to the Docker service name
+      MONGODB_URI: mongodb://soar-database:27017
+      MONGODB_DB_NAME: cybersentinel
+      NODE_ENV: production
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+    volumes:
+      - soar-backend-logs:/app/logs
+    networks:
+      - soar-network
+    depends_on:
+      soar-database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Frontend — soar-frontend
+  # ─────────────────────────────────────────────────────────────────────────
+  soar-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soar-frontend
+    ports:
+      - "3000:3000"
+    networks:
+      - soar-network
+    depends_on:
+      soar-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Networks & Volumes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+networks:
+  soar-network:
+    driver: bridge
+
+volumes:
+  soar-db-data:
+    driver: local
+  soar-db-config:
+    driver: local
+  soar-backend-logs:
+    driver: local

@@ -1,0 +1,281 @@
+[
+  {
+    "playbook_id": "PB-001",
+    "name": "High Severity Malware Response",
+    "description": "Automated response for high severity malware detections",
+    "enabled": true,
+    "priority": "high",
+    "requiresApproval": true,
+    "trigger": {
+      "conditions": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "alertType",
+            "operator": "equals",
+            "value": "malware_detection"
+          },
+          {
+            "field": "severity",
+            "operator": "in",
+            "value": ["high", "critical"]
+          }
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "step1",
+        "name": "Isolate Host",
+        "action": "isolate_host",
+        "connector": "wazuh",
+        "config": {
+          "agent_id": "{{alert.entities.hostname}}"
+        }
+      },
+      {
+        "id": "step2",
+        "name": "Notify SOC Team",
+        "action": "send_notification",
+        "connector": "slack",
+        "config": {
+          "channel": "#soc-alerts",
+          "message": "High severity malware detected on {{alert.entities.hostname}}"
+        }
+      }
+    ],
+    "created_by": "admin",
+    "created_at": "2026-01-02T00:00:00.000Z"
+  },
+  {
+    "playbook_id": "PB-002",
+    "name": "Malicious IP Auto-Block",
+    "description": "Automatically block IPs with high abuse confidence score",
+    "enabled": true,
+    "priority": "critical",
+    "requiresApproval": true,
+    "trigger": {
+      "conditions": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "entities.sourceIp",
+            "operator": "exists"
+          },
+          {
+            "field": "enrichmentData.abuseipdb.results.*.abuseConfidenceScore",
+            "operator": "gte",
+            "value": 75
+          }
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "step1",
+        "name": "Block IP at Firewall",
+        "action": "block_ip",
+        "connector": "firewall",
+        "config": {
+          "ip_address": "{{alert.entities.sourceIp[0]}}",
+          "duration": 3600
+        }
+      },
+      {
+        "id": "step2",
+        "name": "Create Ticket",
+        "action": "create_ticket",
+        "connector": "jira",
+        "config": {
+          "summary": "Malicious IP {{alert.entities.sourceIp[0]}} blocked",
+          "priority": "High"
+        }
+      }
+    ],
+    "created_by": "admin",
+    "created_at": "2026-01-02T00:00:00.000Z"
+  },
+  {
+    "playbook_id": "PB-003",
+    "name": "Brute Force Attack Response",
+    "description": "Response for brute force attack attempts",
+    "enabled": true,
+    "priority": "medium",
+    "requiresApproval": false,
+    "trigger": {
+      "conditions": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "alertType",
+            "operator": "equals",
+            "value": "brute_force_attack"
+          },
+          {
+            "field": "severity",
+            "operator": "in",
+            "value": ["high", "critical"]
+          }
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "step1",
+        "name": "Disable User Account",
+        "action": "disable_user",
+        "connector": "active_directory",
+        "config": {
+          "username": "{{alert.entities.username[0]}}"
+        }
+      },
+      {
+        "id": "step2",
+        "name": "Notify User",
+        "action": "send_email",
+        "connector": "smtp",
+        "config": {
+          "to": "{{alert.entities.username[0]}}@company.com",
+          "subject": "Account locked due to suspicious activity"
+        }
+      }
+    ],
+    "created_by": "admin",
+    "created_at": "2026-01-02T00:00:00.000Z"
+  },
+  {
+    "playbook_id": "PB-004",
+    "name": "Critical File Detection Response",
+    "description": "Response for malicious files detected by VirusTotal",
+    "enabled": true,
+    "priority": "critical",
+    "requiresApproval": true,
+    "trigger": {
+      "conditions": {
+        "operator": "AND",
+        "conditions": [
+          {
+            "field": "entities.fileHash",
+            "operator": "exists"
+          },
+          {
+            "field": "enrichmentData.virustotal.results.*.threatLevel",
+            "operator": "equals",
+            "value": "critical"
+          }
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "step1",
+        "name": "Quarantine File",
+        "action": "quarantine_file",
+        "connector": "wazuh",
+        "config": {
+          "agent_id": "{{alert.entities.hostname[0]}}",
+          "file_path": "{{alert.entities.filePath[0]}}"
+        }
+      },
+      {
+        "id": "step2",
+        "name": "Alert Security Team",
+        "action": "send_notification",
+        "connector": "slack",
+        "config": {
+          "channel": "#security-critical",
+          "message": "Critical malware detected: {{alert.entities.fileName[0]}} (Detection: {{alert.enrichmentData.virustotal.results.*.detectionRate}}%)"
+        }
+      }
+    ],
+    "created_by": "admin",
+    "created_at": "2026-01-02T00:00:00.000Z"
+  },
+  {
+    "playbook_id": "PB-005",
+    "name": "Data Exfiltration Response",
+    "description": "Response for suspected data exfiltration attempts",
+    "enabled": true,
+    "priority": "critical",
+    "requiresApproval": true,
+    "trigger": {
+      "conditions": {
+        "field": "alertType",
+        "operator": "equals",
+        "value": "data_exfiltration"
+      }
+    },
+    "steps": [
+      {
+        "id": "step1",
+        "name": "Isolate Host",
+        "action": "isolate_host",
+        "connector": "wazuh",
+        "config": {
+          "agent_id": "{{alert.entities.hostname[0]}}"
+        }
+      },
+      {
+        "id": "step2",
+        "name": "Block Destination IP",
+        "action": "block_ip",
+        "connector": "firewall",
+        "config": {
+          "ip_address": "{{alert.entities.destinationIp[0]}}",
+          "duration": 86400
+        }
+      },
+      {
+        "id": "step3",
+        "name": "Escalate to IR Team",
+        "action": "send_notification",
+        "connector": "pagerduty",
+        "config": {
+          "severity": "critical",
+          "message": "Data exfiltration detected from {{alert.entities.hostname[0]}}"
+        }
+      }
+    ],
+    "created_by": "admin",
+    "created_at": "2026-01-02T00:00:00.000Z"
+  },
+  {
+    "playbook_id": "PB-006",
+    "name": "Low Confidence Alert Enrichment",
+    "description": "Additional enrichment for low confidence alerts",
+    "enabled": true,
+    "priority": "low",
+    "requiresApproval": false,
+    "trigger": {
+      "conditions": {
+        "operator": "OR",
+        "conditions": [
+          {
+            "field": "severity",
+            "operator": "equals",
+            "value": "low"
+          },
+          {
+            "field": "severity",
+            "operator": "equals",
+            "value": "informational"
+          }
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "step1",
+        "name": "Log to SIEM",
+        "action": "log_event",
+        "connector": "siem",
+        "config": {
+          "source": "cybersentinel_soar",
+          "event_type": "low_confidence_alert"
+        }
+      }
+    ],
+    "created_by": "admin",
+    "created_at": "2026-01-02T00:00:00.000Z"
+  }
+]

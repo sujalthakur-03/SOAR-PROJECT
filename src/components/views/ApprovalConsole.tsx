@@ -28,7 +28,8 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
 export function ApprovalConsole() {
-  const { data: approvals = [], isLoading, refetch } = useApprovals();
+  const { data, isLoading, refetch } = useApprovals();
+  const approvals = Array.isArray(data) ? data : [];
   const approveAction = useApproveAction();
   const rejectAction = useRejectAction();
   const { toast } = useToast();

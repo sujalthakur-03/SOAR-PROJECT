@@ -7,7 +7,8 @@ import { useAuditLogs } from '@/hooks/useAuditLogs';
 import { cn } from '@/lib/utils';
 
 export function AuditLog() {
-  const { data: auditLogs = [], isLoading, refetch } = useAuditLogs();
+  const { data, isLoading, refetch } = useAuditLogs();
+  const auditLogs = Array.isArray(data) ? data : [];
 
   if (isLoading) {
     return (

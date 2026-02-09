@@ -22,3 +22,29 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ── Secrets & credentials ──
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+ACCESS_INFO.txt
+
+# ── Claude / AI agent artifacts ──
+.claude/
+
+# ── Documentation (keep only README.md) ──
+*.md
+!README.md
+!backend/README.md
+
+# ── Deployment scripts ──
+*.sh
+
+# ── Loose SQL scripts (keep supabase/migrations/) ──
+/*.sql
+
+# ── Forwarder (deployed separately on Wazuh server) ──
+forwarder/

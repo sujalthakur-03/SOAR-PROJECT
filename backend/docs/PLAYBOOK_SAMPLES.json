@@ -1,0 +1,530 @@
+{
+  "valid_playbooks": {
+    "simple_notification": {
+      "description": "Simple valid playbook with single notification step",
+      "playbook": {
+        "playbook_id": "PB-NOTIFY-001",
+        "name": "Simple Notification Playbook",
+        "description": "Sends a notification to Slack",
+        "dsl": {
+          "shadow_mode": false,
+          "trigger_type": "webhook",
+          "steps": [
+            {
+              "step_id": "notify_soc",
+              "name": "Notify SOC Team",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#soc-alerts",
+                "message_template": "literal:Alert received from {{trigger_data.source}}"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "enrichment_condition_action": {
+      "description": "Complete playbook with enrichment, condition, and action steps",
+      "playbook": {
+        "playbook_id": "PB-BRUTE-001",
+        "name": "SSH Brute Force Response",
+        "description": "Automated response to SSH brute force attacks",
+        "dsl": {
+          "shadow_mode": false,
+          "trigger_type": "webhook",
+          "steps": [
+            {
+              "step_id": "enrich_source_ip",
+              "name": "Enrich Source IP",
+              "type": "enrichment",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "continue",
+              "retry_policy": {
+                "enabled": true,
+                "max_attempts": 3,
+                "delay_seconds": 2,
+                "backoff_multiplier": 2.0,
+                "max_delay_seconds": 10
+              },
+              "connector_id": "abuseipdb",
+              "action_type": "lookup_ip",
+              "input": {
+                "ip_address": "trigger_data.data.source_ip"
+              }
+            },
+            {
+              "step_id": "check_abuse_score",
+              "name": "Check if IP is Malicious",
+              "type": "condition",
+              "timeout_seconds": 5,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "condition": {
+                "field": "steps.enrich_source_ip.output.abuse_score",
+                "operator": "greater_than",
+                "value": 80
+              },
+              "on_true": "block_ip",
+              "on_false": "notify_low_score"
+            },
+            {
+              "step_id": "block_ip",
+              "name": "Block IP on Firewall",
+              "type": "action",
+              "timeout_seconds": 60,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "retry_policy": {
+                "enabled": true,
+                "max_attempts": 3,
+                "delay_seconds": 5,
+                "backoff_multiplier": 2.0,
+                "max_delay_seconds": 30
+              },
+              "connector_id": "firewall-01",
+              "action_type": "block_ip",
+              "input": {
+                "ip_address": "trigger_data.data.source_ip",
+                "duration": "literal:24h"
+              }
+            },
+            {
+              "step_id": "notify_success",
+              "name": "Notify Success",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#soc-alerts",
+                "message_template": "literal:Blocked {{trigger_data.data.source_ip}} successfully"
+              }
+            },
+            {
+              "step_id": "notify_low_score",
+              "name": "Notify Low Score",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#soc-alerts",
+                "message_template": "literal:IP {{trigger_data.data.source_ip}} has low abuse score"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "approval_workflow": {
+      "description": "Playbook with approval gate demonstrating mandatory on_timeout",
+      "playbook": {
+        "playbook_id": "PB-APPROVAL-001",
+        "name": "Account Lockout Approval",
+        "description": "Requires approval before locking user account",
+        "dsl": {
+          "shadow_mode": false,
+          "trigger_type": "webhook",
+          "steps": [
+            {
+              "step_id": "enrich_user",
+              "name": "Enrich User Account",
+              "type": "enrichment",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "continue",
+              "connector_id": "ad_connector",
+              "action_type": "lookup_user",
+              "input": {
+                "username": "trigger_data.username"
+              }
+            },
+            {
+              "step_id": "approve_lockout",
+              "name": "Approve Account Lockout",
+              "type": "approval",
+              "timeout_seconds": 3600,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "approvers": ["role:soc_analyst", "role:soc_manager"],
+              "message": "Approve lockout for user {{trigger_data.username}}?",
+              "input": {
+                "username": "trigger_data.username",
+                "department": "steps.enrich_user.output.department",
+                "last_login": "steps.enrich_user.output.last_login"
+              },
+              "timeout_hours": 1,
+              "on_approved": "lock_account",
+              "on_rejected": "notify_rejected",
+              "on_timeout": "notify_timeout"
+            },
+            {
+              "step_id": "lock_account",
+              "name": "Lock User Account",
+              "type": "action",
+              "timeout_seconds": 60,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "connector_id": "ad_connector",
+              "action_type": "disable_account",
+              "input": {
+                "username": "trigger_data.username"
+              }
+            },
+            {
+              "step_id": "notify_success",
+              "name": "Notify Success",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#soc-alerts",
+                "message_template": "literal:Account {{trigger_data.username}} locked successfully"
+              }
+            },
+            {
+              "step_id": "notify_rejected",
+              "name": "Notify Rejection",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#soc-alerts",
+                "message_template": "literal:Account lockout for {{trigger_data.username}} was rejected"
+              }
+            },
+            {
+              "step_id": "notify_timeout",
+              "name": "Notify Timeout",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#soc-alerts",
+                "message_template": "literal:Approval timed out for {{trigger_data.username}}"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "shadow_mode": {
+      "description": "Playbook in shadow mode (actions skipped)",
+      "playbook": {
+        "playbook_id": "PB-SHADOW-001",
+        "name": "Malware Response (Shadow Mode)",
+        "description": "Testing playbook with shadow mode enabled",
+        "dsl": {
+          "shadow_mode": true,
+          "trigger_type": "webhook",
+          "steps": [
+            {
+              "step_id": "enrich_file",
+              "name": "Enrich File Hash",
+              "type": "enrichment",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "continue",
+              "connector_id": "virustotal",
+              "action_type": "lookup_hash",
+              "input": {
+                "hash": "trigger_data.file_hash"
+              }
+            },
+            {
+              "step_id": "quarantine_file",
+              "name": "Quarantine File (SHADOW MODE - SKIPPED)",
+              "type": "action",
+              "timeout_seconds": 60,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "connector_id": "edr_connector",
+              "action_type": "quarantine_file",
+              "input": {
+                "file_path": "trigger_data.file_path",
+                "host": "trigger_data.hostname"
+              }
+            },
+            {
+              "step_id": "notify",
+              "name": "Notify SOC",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#soc-alerts",
+                "message_template": "literal:Malware detected (shadow mode)"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "invalid_playbooks": {
+    "missing_on_false": {
+      "description": "INVALID: Condition step missing on_false",
+      "expected_error": "CONDITION_MISSING_ON_FALSE",
+      "playbook": {
+        "playbook_id": "PB-INVALID-001",
+        "name": "Invalid Condition Playbook",
+        "description": "Missing on_false in condition step",
+        "dsl": {
+          "shadow_mode": false,
+          "steps": [
+            {
+              "step_id": "check_score",
+              "name": "Check Score",
+              "type": "condition",
+              "timeout_seconds": 5,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "condition": {
+                "field": "trigger_data.score",
+                "operator": "greater_than",
+                "value": 50
+              },
+              "on_true": "notify"
+            },
+            {
+              "step_id": "notify",
+              "name": "Notify",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#alerts",
+                "message_template": "literal:Alert"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "missing_on_timeout": {
+      "description": "INVALID: Approval step missing on_timeout",
+      "expected_error": "APPROVAL_MISSING_ON_TIMEOUT",
+      "playbook": {
+        "playbook_id": "PB-INVALID-002",
+        "name": "Invalid Approval Playbook",
+        "description": "Missing on_timeout in approval step",
+        "dsl": {
+          "shadow_mode": false,
+          "steps": [
+            {
+              "step_id": "approve_action",
+              "name": "Approve Action",
+              "type": "approval",
+              "timeout_seconds": 3600,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "approvers": ["role:analyst"],
+              "message": "Approve this action?",
+              "input": {},
+              "timeout_hours": 1,
+              "on_approved": "take_action",
+              "on_rejected": "stop"
+            },
+            {
+              "step_id": "take_action",
+              "name": "Take Action",
+              "type": "action",
+              "timeout_seconds": 60,
+              "on_success": { "behavior": "end" },
+              "on_failure": "stop",
+              "connector_id": "test",
+              "action_type": "test_action",
+              "input": {}
+            }
+          ]
+        }
+      }
+    },
+    "circular_reference": {
+      "description": "INVALID: Circular reference between steps",
+      "expected_error": "CIRCULAR_REFERENCE",
+      "playbook": {
+        "playbook_id": "PB-INVALID-003",
+        "name": "Circular Reference Playbook",
+        "description": "Steps form a circular reference",
+        "dsl": {
+          "shadow_mode": false,
+          "steps": [
+            {
+              "step_id": "step_a",
+              "name": "Step A",
+              "type": "condition",
+              "timeout_seconds": 5,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "condition": {
+                "field": "trigger_data.value",
+                "operator": "equals",
+                "value": 1
+              },
+              "on_true": "step_b",
+              "on_false": "step_c"
+            },
+            {
+              "step_id": "step_b",
+              "name": "Step B",
+              "type": "condition",
+              "timeout_seconds": 5,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "condition": {
+                "field": "trigger_data.value",
+                "operator": "equals",
+                "value": 2
+              },
+              "on_true": "step_c",
+              "on_false": "step_a"
+            },
+            {
+              "step_id": "step_c",
+              "name": "Step C",
+              "type": "condition",
+              "timeout_seconds": 5,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "condition": {
+                "field": "trigger_data.value",
+                "operator": "equals",
+                "value": 3
+              },
+              "on_true": "__END__",
+              "on_false": "step_b"
+            }
+          ]
+        }
+      }
+    },
+    "invalid_step_reference": {
+      "description": "INVALID: Step references non-existent step",
+      "expected_error": "INVALID_STEP_REFERENCE",
+      "playbook": {
+        "playbook_id": "PB-INVALID-004",
+        "name": "Invalid Reference Playbook",
+        "description": "References non-existent step",
+        "dsl": {
+          "shadow_mode": false,
+          "steps": [
+            {
+              "step_id": "check",
+              "name": "Check Condition",
+              "type": "condition",
+              "timeout_seconds": 5,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "stop",
+              "condition": {
+                "field": "trigger_data.score",
+                "operator": "greater_than",
+                "value": 50
+              },
+              "on_true": "non_existent_step",
+              "on_false": "__END__"
+            }
+          ]
+        }
+      }
+    },
+    "duplicate_step_ids": {
+      "description": "INVALID: Duplicate step IDs",
+      "expected_error": "DUPLICATE_STEP_ID",
+      "playbook": {
+        "playbook_id": "PB-INVALID-005",
+        "name": "Duplicate Step IDs Playbook",
+        "description": "Contains duplicate step_id values",
+        "dsl": {
+          "shadow_mode": false,
+          "steps": [
+            {
+              "step_id": "notify",
+              "name": "Notify First",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "continue" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#alerts",
+                "message_template": "literal:First"
+              }
+            },
+            {
+              "step_id": "notify",
+              "name": "Notify Second",
+              "type": "notification",
+              "timeout_seconds": 30,
+              "on_success": { "behavior": "end" },
+              "on_failure": "continue",
+              "connector_id": "slack",
+              "action_type": "send_message",
+              "input": {
+                "channel": "literal:#alerts",
+                "message_template": "literal:Second"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "max_steps_exceeded": {
+      "description": "INVALID: More than 100 steps",
+      "expected_error": "MAX_STEPS_EXCEEDED",
+      "note": "Truncated for brevity - would have 101+ steps"
+    },
+    "missing_connector_id": {
+      "description": "INVALID: Action step missing connector_id",
+      "expected_error": "CONNECTOR_MISSING_CONNECTOR_ID",
+      "playbook": {
+        "playbook_id": "PB-INVALID-006",
+        "name": "Missing Connector ID Playbook",
+        "description": "Action step without connector_id",
+        "dsl": {
+          "shadow_mode": false,
+          "steps": [
+            {
+              "step_id": "take_action",
+              "name": "Take Action",
+              "type": "action",
+              "timeout_seconds": 60,
+              "on_success": { "behavior": "end" },
+              "on_failure": "stop",
+              "action_type": "block_ip",
+              "input": {
+                "ip": "trigger_data.ip"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

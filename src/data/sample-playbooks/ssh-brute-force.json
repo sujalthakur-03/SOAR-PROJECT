@@ -1,0 +1,175 @@
+{
+  "playbook_id": "pb-ssh-brute-force-v2",
+  "name": "SSH Brute Force Response (Advanced)",
+  "description": "Comprehensive SSH brute force detection and response playbook. Validates attack pattern, enriches attacker IP via multiple sources, applies conditional approval workflow, and executes automated blocking with notification.",
+  "version": 2,
+  "status": "active",
+  "shadow_mode": false,
+  "created_at": "2026-01-27T10:00:00Z",
+  "created_by": "soc-admin@cybersentinel.io",
+
+  "trigger": {
+    "type": "webhook",
+    "source": "cybersentinel",
+    "rule_ids": ["5710", "5712", "5720"],
+    "severity_threshold": "high",
+    "description": "Triggers on SSH authentication failure rules from CyberSentinel"
+  },
+
+  "steps": [
+    {
+      "step_id": "condition-1",
+      "type": "condition",
+      "name": "Check Failed Attempts Threshold",
+      "condition": {
+        "field": "failed_attempts",
+        "operator": "greater_or_equal",
+        "value": 5,
+        "time_window_minutes": 2
+      },
+      "on_true": "enrich-vt",
+      "on_false": "__END__"
+    },
+    {
+      "step_id": "enrich-vt",
+      "type": "enrichment",
+      "name": "VirusTotal IP Reputation",
+      "connector_id": "virustotal",
+      "action_type": "lookup_ip",
+      "parameters": {
+        "observable_field": "source_ip",
+        "output_variable": "vt_result"
+      },
+      "on_success": "enrich-abuseipdb",
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "enrich-abuseipdb",
+      "type": "enrichment",
+      "name": "AbuseIPDB Confidence Score",
+      "connector_id": "abuseipdb",
+      "action_type": "check_ip",
+      "parameters": {
+        "observable_field": "source_ip",
+        "output_variable": "abuseipdb_result"
+      },
+      "on_success": "condition-reputation",
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "condition-reputation",
+      "type": "condition",
+      "name": "Is IP Malicious?",
+      "description": "Check if either VT or AbuseIPDB indicates malicious IP",
+      "condition": {
+        "expression": "(vt_result.malicious_votes > 3) OR (abuseipdb_result.abuse_confidence_score > 50)"
+      },
+      "on_true": "condition-severity",
+      "on_false": "notify-low-risk"
+    },
+    {
+      "step_id": "condition-severity",
+      "type": "condition",
+      "name": "Check Severity for Auto-Approval",
+      "description": "Critical alerts auto-skip approval; High alerts require approval",
+      "condition": {
+        "field": "severity",
+        "operator": "equals",
+        "value": "critical"
+      },
+      "on_true": "action-block",
+      "on_false": "approval-block"
+    },
+    {
+      "step_id": "approval-block",
+      "type": "approval",
+      "name": "Request SOC Approval",
+      "approvers": ["senior_analyst", "manager"],
+      "timeout_hours": 1,
+      "message": "Approve blocking IP {{trigger_data.source_ip}}?\n\nAlert: {{trigger_data.rule_name}}\nFailed Attempts: {{trigger_data.failed_attempts}}\nVirusTotal: {{vt_result.malicious_votes}} malicious votes\nAbuseIPDB Score: {{abuseipdb_result.abuse_confidence_score}}%",
+      "on_approved": "action-block",
+      "on_rejected": "notify-rejected",
+      "on_timeout": "notify-timeout"
+    },
+    {
+      "step_id": "action-block",
+      "type": "action",
+      "name": "Block IP on Firewall",
+      "connector_id": "firewall",
+      "action_type": "block_ip",
+      "parameters": {
+        "ip": "{{trigger_data.source_ip}}",
+        "duration": "24h",
+        "reason": "SSH brute force attack detected (Playbook: SSH Brute Force Response)"
+      },
+      "on_success": "notify-success",
+      "on_failure": "notify-block-failed"
+    },
+    {
+      "step_id": "notify-success",
+      "type": "notification",
+      "name": "Notify SOC - IP Blocked",
+      "connector_id": "smtp",
+      "channel": "email",
+      "recipients": "soc-team@example.com",
+      "subject": "[CyberSentinel] SSH Brute Force - IP Blocked: {{trigger_data.source_ip}}",
+      "message": "SSH Brute Force Response Completed\n\n=== Alert Details ===\nRule: {{trigger_data.rule_name}}\nSeverity: {{trigger_data.severity}}\nSource IP: {{trigger_data.source_ip}}\nTarget: {{trigger_data.agent_name}}\nFailed Attempts: {{trigger_data.failed_attempts}}\n\n=== Enrichment Results ===\nVirusTotal: {{vt_result.malicious_votes}}/{{vt_result.total_votes}} malicious votes\nAbuseIPDB: {{abuseipdb_result.abuse_confidence_score}}% confidence score\nCountry: {{abuseipdb_result.country_code}}\nISP: {{abuseipdb_result.isp}}\n\n=== Action Taken ===\nIP {{trigger_data.source_ip}} blocked for 24 hours on firewall.\n\n---\nAutomated by CyberSentinel SOAR",
+      "on_success": "__END__",
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "notify-low-risk",
+      "type": "notification",
+      "name": "Notify SOC - Low Risk IP",
+      "connector_id": "slack",
+      "channel": "slack",
+      "recipients": "#soc-monitoring",
+      "message": ":information_source: *SSH Activity - Low Risk*\n\nIP `{{trigger_data.source_ip}}` triggered SSH brute force rule but has low threat score.\n\n*VirusTotal:* {{vt_result.malicious_votes}} malicious votes\n*AbuseIPDB:* {{abuseipdb_result.abuse_confidence_score}}% confidence\n\nNo automatic action taken. Review if pattern continues.",
+      "on_success": "__END__",
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "notify-rejected",
+      "type": "notification",
+      "name": "Notify - Approval Rejected",
+      "connector_id": "slack",
+      "channel": "slack",
+      "recipients": "#soc-alerts",
+      "message": ":no_entry: *Block Request Rejected*\n\nIP `{{trigger_data.source_ip}}` will NOT be blocked.\n\nReview and take manual action if needed.",
+      "on_success": "__END__",
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "notify-timeout",
+      "type": "notification",
+      "name": "Notify - Approval Timeout",
+      "connector_id": "email",
+      "channel": "email",
+      "recipients": "soc-manager@example.com",
+      "subject": "[URGENT] SSH Brute Force - Approval Timeout",
+      "message": "Approval request for blocking IP {{trigger_data.source_ip}} has timed out.\n\nPlease review and take manual action.\n\nAlert: {{trigger_data.rule_name}}\nSeverity: {{trigger_data.severity}}",
+      "on_success": "__END__",
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "notify-block-failed",
+      "type": "notification",
+      "name": "Notify - Block Action Failed",
+      "connector_id": "email",
+      "channel": "email",
+      "recipients": "soc-team@example.com,soc-manager@example.com",
+      "subject": "[CRITICAL] SSH Brute Force - Block Failed",
+      "message": "CRITICAL: Failed to block malicious IP {{trigger_data.source_ip}}\n\nManual intervention required!\n\nError details will be in execution logs.",
+      "on_success": "__END__",
+      "on_failure": "continue"
+    }
+  ],
+
+  "metadata": {
+    "mitre_techniques": ["T1110.001", "T1110.003"],
+    "mitre_tactics": ["Credential Access"],
+    "tags": ["ssh", "brute-force", "authentication", "automated-response"],
+    "estimated_duration_seconds": 120,
+    "requires_connectors": ["virustotal", "abuseipdb", "firewall", "smtp", "slack"]
+  }
+}

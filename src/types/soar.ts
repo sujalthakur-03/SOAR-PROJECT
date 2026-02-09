@@ -39,6 +39,8 @@ export interface Alert {
 }
 
 // API: GET/POST/PUT /api/playbooks
+// SOAR v3 Option A: Triggers own playbook_id (not the other way around)
+// Many playbooks have trigger = null (webhook-only, manual, scheduled)
 export interface Playbook {
   id: string;
   name: string;
@@ -48,14 +50,14 @@ export interface Playbook {
   created_at: string;
   updated_at: string;
   created_by: string;
-  trigger: PlaybookTrigger;
+  trigger?: PlaybookTrigger | null; // Optional: Triggers own playbooks
   steps: PlaybookStep[];
   execution_count: number;
   last_execution?: string;
 }
 
 export interface PlaybookTrigger {
-  source: 'wazuh';
+  source: 'cybersentinel' | 'webhook' | string;
   rule_ids: string[];
   severity_threshold: Severity;
   conditions?: TriggerCondition[];

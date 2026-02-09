@@ -11,7 +11,8 @@ import { canEditFeature } from '@/lib/permissions';
 import { useToast } from '@/hooks/use-toast';
 
 export function ConnectorStatus() {
-  const { data: connectors = [], isLoading, refetch } = useConnectors();
+  const { data, isLoading, refetch } = useConnectors();
+  const connectors = Array.isArray(data) ? data : [];
   const toggleConnector = useToggleConnector();
   const { role } = useUserRole();
   const { toast } = useToast();
@@ -76,14 +77,14 @@ export function ConnectorStatus() {
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Badge variant="outline" className="text-xs">{connector.type}</Badge>
-                  <span>{connector.executionCount} executions</span>
-                  {connector.errorCount > 0 && (
-                    <span className="text-destructive">{connector.errorCount} errors</span>
+                  <span>{connector.execution_count} executions</span>
+                  {connector.error_count > 0 && (
+                    <span className="text-destructive">{connector.error_count} errors</span>
                   )}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {connector.lastCheck && (
-                    <span>Last check: <TimeAgo date={connector.lastCheck} /></span>
+                  {connector.last_check && (
+                    <span>Last check: <TimeAgo date={connector.last_check} /></span>
                   )}
                 </div>
                 <div className="flex flex-wrap gap-1">

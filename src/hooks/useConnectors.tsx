@@ -1,63 +1,101 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import type { Database } from '@/integrations/supabase/types';
-
-type ConnectorRow = Database['public']['Tables']['connectors']['Row'];
+import { apiClient } from '@/lib/api-client';
 
 export interface Connector {
   id: string;
-  connectorId: string;
+  connector_id: string;
   name: string;
   type: string;
-  status: 'healthy' | 'degraded' | 'error' | 'disabled';
-  enabled: boolean;
-  lastCheck: string | null;
-  lastExecution: string | null;
-  executionCount: number;
-  errorCount: number;
-  actions: string[];
+  description?: string;
+  status: 'active' | 'inactive' | 'error' | 'testing';
+  config: Record<string, any>;
+  last_health_check?: string;
+  health_status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
+  health_message?: string;
+  total_executions: number;
+  successful_executions: number;
+  failed_executions: number;
+  last_executed_at?: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by?: string;
+  tags?: string[];
 }
-
-const mapConnectorFromDb = (row: ConnectorRow): Connector => ({
-  id: row.id,
-  connectorId: row.connector_id,
-  name: row.name,
-  type: row.type,
-  status: row.status as Connector['status'],
-  enabled: row.enabled,
-  lastCheck: row.last_check,
-  lastExecution: row.last_execution,
-  executionCount: row.execution_count,
-  errorCount: row.error_count,
-  actions: row.actions || [],
-});
 
 export const useConnectors = () => {
   return useQuery({
     queryKey: ['connectors'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('connectors')
-        .select('*')
-        .order('name');
-      
-      if (error) throw error;
-      return (data || []).map(mapConnectorFromDb);
+    queryFn: () => apiClient.getConnectors(),
+  });
+};
+
+export const useConnector = (id: string, enabled: boolean = true) => {
+  return useQuery({
+    queryKey: ['connectors', id],
+    queryFn: () => apiClient.getConnector(id),
+    enabled: !!id && enabled,
+  });
+};
+
+export const useCreateConnector = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: any) => {
+      return apiClient.createConnector(data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['connectors'] });
+    },
+  });
+};
+
+export const useUpdateConnector = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      return apiClient.updateConnector(id, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['connectors'] });
+    },
+  });
+};
+
+export const useDeleteConnector = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      return apiClient.deleteConnector(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['connectors'] });
+    },
+  });
+};
+
+export const useTestConnector = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      return apiClient.testConnector(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['connectors'] });
     },
   });
 };
 
 export const useToggleConnector = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
-      const { error } = await supabase
-        .from('connectors')
-        .update({ enabled, status: enabled ? 'healthy' : 'disabled' })
-        .eq('id', id);
-      
-      if (error) throw error;
+      return apiClient.toggleConnector(id, enabled);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['connectors'] });

@@ -1,0 +1,57 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1,
+    "refresh_interval": "1s"
+  },
+  "mappings": {
+    "properties": {
+      "approval_id": {
+        "type": "keyword"
+      },
+      "alert_id": {
+        "type": "keyword"
+      },
+      "playbook_id": {
+        "type": "keyword"
+      },
+      "playbook_name": {
+        "type": "keyword"
+      },
+      "requested_by": {
+        "type": "keyword"
+      },
+      "status": {
+        "type": "keyword",
+        "comment": "pending | approved | rejected | expired"
+      },
+      "execution_mode": {
+        "type": "keyword",
+        "comment": "ALWAYS dry-run in Phase 3.0"
+      },
+      "decision_by": {
+        "type": "keyword"
+      },
+      "decision_reason": {
+        "type": "text"
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      },
+      "expires_at": {
+        "type": "date"
+      },
+      "alert_snapshot": {
+        "type": "object",
+        "enabled": false
+      },
+      "playbook_snapshot": {
+        "type": "object",
+        "enabled": false
+      }
+    }
+  }
+}

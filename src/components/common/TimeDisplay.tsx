@@ -8,14 +8,30 @@ interface TimeAgoProps {
 }
 
 export function TimeAgo({ date, className, prefix }: TimeAgoProps) {
-  const timeAgo = formatDistanceToNow(new Date(date), { addSuffix: true });
+  // Defensive guard: return placeholder if date is missing or invalid
+  if (!date) {
+    return <span className={cn('text-muted-foreground', className)}>—</span>;
+  }
 
-  return (
-    <span className={cn('text-muted-foreground', className)}>
-      {prefix && `${prefix} `}
-      {timeAgo}
-    </span>
-  );
+  try {
+    const parsedDate = new Date(date);
+    // Check for Invalid Date
+    if (isNaN(parsedDate.getTime())) {
+      return <span className={cn('text-muted-foreground', className)}>—</span>;
+    }
+
+    const timeAgo = formatDistanceToNow(parsedDate, { addSuffix: true });
+
+    return (
+      <span className={cn('text-muted-foreground', className)}>
+        {prefix && `${prefix} `}
+        {timeAgo}
+      </span>
+    );
+  } catch {
+    // Catch any date parsing errors
+    return <span className={cn('text-muted-foreground', className)}>—</span>;
+  }
 }
 
 interface CountdownProps {

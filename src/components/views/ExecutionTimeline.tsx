@@ -10,6 +10,7 @@ import {
   Loader2,
   AlertTriangle,
   FileJson,
+  FolderPlus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -40,6 +41,7 @@ import { StateBadge } from '@/components/common/StatusBadges';
 import { TimeAgo } from '@/components/common/TimeDisplay';
 import { useExecutions, type Execution } from '@/hooks/useExecutions';
 import { cn } from '@/lib/utils';
+import CreateCaseModal from '@/components/cases/CreateCaseModal';
 
 const stepStateIcons = {
   pending: Clock,
@@ -58,9 +60,11 @@ const stepStateColors = {
 };
 
 export function ExecutionTimeline() {
-  const { data: executions = [], isLoading, refetch } = useExecutions();
+  const { data, isLoading, refetch } = useExecutions();
+  const executions = Array.isArray(data) ? data : [];
   const [stateFilter, setStateFilter] = useState<string>('all');
   const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
+  const [createCaseModalOpen, setCreateCaseModalOpen] = useState(false);
 
   const filteredExecutions = executions.filter((exe) => {
     if (stateFilter !== 'all' && exe.state !== stateFilter) return false;
@@ -207,6 +211,19 @@ export function ExecutionTimeline() {
                                 <p className="text-sm text-status-error/80 mt-1">{execution.error}</p>
                               </div>
                             )}
+                            <div className="pt-4 border-t">
+                              <Button
+                                onClick={() => {
+                                  setSelectedExecution(execution);
+                                  setCreateCaseModalOpen(true);
+                                }}
+                                className="w-full gap-2"
+                                variant="outline"
+                              >
+                                <FolderPlus className="h-4 w-4" />
+                                Create Case from Execution
+                              </Button>
+                            </div>
                           </div>
                         </SheetContent>
                       </Sheet>
@@ -218,6 +235,15 @@ export function ExecutionTimeline() {
           )}
         </CardContent>
       </Card>
+
+      {selectedExecution && (
+        <CreateCaseModal
+          open={createCaseModalOpen}
+          onOpenChange={setCreateCaseModalOpen}
+          executionId={selectedExecution.executionId}
+          executionData={selectedExecution}
+        />
+      )}
     </div>
   );
 }

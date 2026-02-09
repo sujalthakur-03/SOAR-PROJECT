@@ -1,0 +1,141 @@
+{
+  "mappings": {
+    "properties": {
+      "id": {
+        "type": "keyword"
+      },
+      "fingerprint": {
+        "type": "keyword"
+      },
+      "sourceSystem": {
+        "type": "keyword"
+      },
+      "alertType": {
+        "type": "keyword"
+      },
+      "category": {
+        "type": "keyword"
+      },
+      "severity": {
+        "type": "keyword"
+      },
+      "priority": {
+        "type": "keyword"
+      },
+      "status": {
+        "type": "keyword"
+      },
+      "assignedTo": {
+        "type": "keyword"
+      },
+      "assignedAt": {
+        "type": "date"
+      },
+      "resolvedAt": {
+        "type": "date"
+      },
+      "resolution": {
+        "type": "text"
+      },
+      "detectedAt": {
+        "type": "date"
+      },
+      "ingestedAt": {
+        "type": "date"
+      },
+      "title": {
+        "type": "text"
+      },
+      "description": {
+        "type": "text"
+      },
+      "entities": {
+        "properties": {
+          "sourceIp": {
+            "type": "ip"
+          },
+          "destinationIp": {
+            "type": "ip"
+          },
+          "hostname": {
+            "type": "keyword"
+          },
+          "username": {
+            "type": "keyword"
+          },
+          "fileHash": {
+            "type": "keyword"
+          },
+          "fileName": {
+            "type": "text"
+          },
+          "filePath": {
+            "type": "text"
+          },
+          "url": {
+            "type": "keyword"
+          },
+          "email": {
+            "type": "keyword"
+          },
+          "processName": {
+            "type": "keyword"
+          },
+          "processId": {
+            "type": "integer"
+          },
+          "domain": {
+            "type": "keyword"
+          },
+          "registryKey": {
+            "type": "keyword"
+          },
+          "port": {
+            "type": "integer"
+          }
+        }
+      },
+      "enrichmentData": {
+        "type": "object",
+        "enabled": false
+      },
+      "playbooks": {
+        "type": "keyword"
+      },
+      "tags": {
+        "type": "keyword"
+      },
+      "metadata": {
+        "properties": {
+          "schemaVersion": {
+            "type": "keyword"
+          },
+          "source": {
+            "type": "keyword"
+          },
+          "sourceId": {
+            "type": "keyword"
+          },
+          "ingestionVersion": {
+            "type": "keyword"
+          }
+        }
+      },
+      "rawData": {
+        "type": "object",
+        "enabled": false
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      }
+    }
+  },
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1,
+    "refresh_interval": "1s"
+  }
+}
