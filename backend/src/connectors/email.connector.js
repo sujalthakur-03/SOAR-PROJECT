@@ -34,7 +34,9 @@ function getTransporter(config) {
   }
 
   // Re-use transporter if config unchanged
-  if (cachedTransporter && cachedTransporter._host === host && cachedTransporter._user === user) {
+  if (cachedTransporter && cachedTransporter._host === host &&
+      cachedTransporter._user === user && cachedTransporter._port === port &&
+      cachedTransporter._pass === pass) {
     return cachedTransporter;
   }
 
@@ -42,11 +44,16 @@ function getTransporter(config) {
     host,
     port,
     secure,
-    auth: { user, pass }
+    auth: { user, pass },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000
   });
 
   transporter._host = host;
   transporter._user = user;
+  transporter._port = port;
+  transporter._pass = pass;
   cachedTransporter = transporter;
   return transporter;
 }
@@ -138,7 +145,9 @@ export const emailConnector = {
 
   async execute(action, inputs, config) {
     switch (action) {
-      case 'send_email': {
+      case 'send_email':
+      case 'email':
+      case 'send_notification': {
         if (!inputs.to) {
           throw Object.assign(
             new Error('No recipient (to) provided for email'),

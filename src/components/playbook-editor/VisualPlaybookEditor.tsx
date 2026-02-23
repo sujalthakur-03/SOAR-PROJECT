@@ -75,7 +75,7 @@ interface DSLStep {
  * This mapping is internal — never exposed in UI.
  */
 const NOTIFICATION_CHANNEL_TO_ACTION_TYPE: Record<string, string> = {
-  email: 'email',
+  email: 'send_email',
   slack: 'slack',
   webhook: 'webhook',
   teams: 'teams',
