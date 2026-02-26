@@ -141,7 +141,7 @@ const conditionSteps: StepDefinition[] = [
     description: 'Check if severity >= threshold',
     color: 'text-yellow-500 bg-yellow-500/10 border-yellow-500/30',
     defaultConfig: {
-      field: 'severity',
+      field: 'trigger_data.severity',
       operator: 'greater_or_equal',
       value: 'high',
       severity_levels: ['critical', 'high', 'medium', 'low']
@@ -155,7 +155,7 @@ const conditionSteps: StepDefinition[] = [
     description: 'Match rule.id, agent.name, src.ip, etc.',
     color: 'text-yellow-500 bg-yellow-500/10 border-yellow-500/30',
     defaultConfig: {
-      field: 'rule_id',
+      field: 'trigger_data.rule_id',
       operator: 'equals',
       value: ''
     }
@@ -168,7 +168,7 @@ const conditionSteps: StepDefinition[] = [
     description: 'Check failed login attempts count',
     color: 'text-red-500 bg-red-500/10 border-red-500/30',
     defaultConfig: {
-      field: 'failed_attempts',
+      field: 'trigger_data.failed_attempts',
       operator: 'greater_or_equal',
       value: 5
     }
@@ -181,7 +181,7 @@ const conditionSteps: StepDefinition[] = [
     description: 'N events in M minutes threshold',
     color: 'text-amber-500 bg-amber-500/10 border-amber-500/30',
     defaultConfig: {
-      field: 'event_count',
+      field: 'trigger_data.event_count',
       operator: 'greater_or_equal',
       value: 5,
       time_window_minutes: 2
@@ -195,7 +195,7 @@ const conditionSteps: StepDefinition[] = [
     description: 'Check enrichment reputation score',
     color: 'text-orange-500 bg-orange-500/10 border-orange-500/30',
     defaultConfig: {
-      field: 'enrichment.reputation_score',
+      field: '',
       operator: 'greater_than',
       value: 50
     }

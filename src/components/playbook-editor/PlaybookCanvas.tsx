@@ -323,6 +323,52 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
   }, [canRedo, redoStack, setNodes, setEdges]);
 
   // ═══════════════════════════════════════════════════════════════════════════════
+  // DELETE FUNCTIONALITY
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  const deleteSelected = useCallback(() => {
+    const selectedNodes = nodes.filter((n) => n.selected);
+    const selectedEdges = edges.filter((e) => e.selected);
+
+    // If only edges are selected, delete just edges (not nodes)
+    if (selectedNodes.length === 0 && selectedEdges.length > 0) {
+      const edgeIdsToDelete = new Set(selectedEdges.map((e) => e.id));
+      const prevNodes = JSON.parse(JSON.stringify(nodes));
+      const prevEdges = JSON.parse(JSON.stringify(edges));
+      const newEdges = edges.filter((e) => !edgeIdsToDelete.has(e.id));
+
+      pushToUndoStack(prevNodes, prevEdges, prevNodes, newEdges, 'delete_edges');
+      setEdges(newEdges);
+      prevStateRef.current = { nodes, edges: newEdges };
+      return;
+    }
+
+    // Delete selected nodes (skip trigger) and their connected edges
+    const nonTriggerNodes = selectedNodes.filter((n) => (n.data as PlaybookNodeData).stepType !== 'trigger');
+    if (nonTriggerNodes.length === 0 && selectedEdges.length === 0) return;
+
+    const nodeIdsToDelete = new Set(nonTriggerNodes.map((n) => n.id));
+    const edgeIdsToDelete = new Set(selectedEdges.map((e) => e.id));
+
+    const prevNodes = JSON.parse(JSON.stringify(nodes));
+    const prevEdges = JSON.parse(JSON.stringify(edges));
+
+    const newNodes = nodes.filter((n) => !nodeIdsToDelete.has(n.id));
+    const newEdges = edges.filter((e) =>
+      !edgeIdsToDelete.has(e.id) &&
+      !nodeIdsToDelete.has(e.source) &&
+      !nodeIdsToDelete.has(e.target)
+    );
+
+    pushToUndoStack(prevNodes, prevEdges, newNodes, newEdges, 'delete_nodes');
+
+    setNodes(newNodes);
+    setEdges(newEdges);
+    setSelectedNode(null);
+    prevStateRef.current = { nodes: newNodes, edges: newEdges };
+  }, [nodes, edges, setNodes, setEdges, pushToUndoStack]);
+
+  // ═══════════════════════════════════════════════════════════════════════════════
   // KEYBOARD SHORTCUTS
   // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -347,41 +393,14 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
 
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault();
-        deleteSelectedNodes();
+        deleteSelected();
         return;
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo]);
-
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // DELETE FUNCTIONALITY
-  // ═══════════════════════════════════════════════════════════════════════════════
-
-  const deleteSelectedNodes = useCallback(() => {
-    const selectedNodes = nodes.filter((n) => n.selected);
-    if (selectedNodes.length === 0) return;
-
-    const nonTriggerNodes = selectedNodes.filter((n) => (n.data as PlaybookNodeData).stepType !== 'trigger');
-    if (nonTriggerNodes.length === 0) return;
-
-    const nodeIdsToDelete = new Set(nonTriggerNodes.map((n) => n.id));
-
-    const prevNodes = JSON.parse(JSON.stringify(nodes));
-    const prevEdges = JSON.parse(JSON.stringify(edges));
-
-    const newNodes = nodes.filter((n) => !nodeIdsToDelete.has(n.id));
-    const newEdges = edges.filter((e) => !nodeIdsToDelete.has(e.source) && !nodeIdsToDelete.has(e.target));
-
-    pushToUndoStack(prevNodes, prevEdges, newNodes, newEdges, 'delete_nodes');
-
-    setNodes(newNodes);
-    setEdges(newEdges);
-    setSelectedNode(null);
-    prevStateRef.current = { nodes: newNodes, edges: newEdges };
-  }, [nodes, edges, setNodes, setEdges, pushToUndoStack]);
+  }, [undo, redo, deleteSelected]);
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // NOTIFY PARENT OF CHANGES
@@ -501,10 +520,9 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
         } as PlaybookNodeData,
       };
 
-      const prevNodes = JSON.parse(JSON.stringify(nodes));
-
       setNodes((nds) => {
-        const newNodes = nds.concat(newNode);
+        const prevNodes = JSON.parse(JSON.stringify(nds));
+        const newNodes = [...nds, newNode];
         pushToUndoStack(prevNodes, edges, newNodes, edges, 'add_node');
         prevStateRef.current = { nodes: newNodes, edges };
         return newNodes;
@@ -540,9 +558,8 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
 
   const onNodeUpdate = useCallback(
     (nodeId: string, data: Partial<PlaybookNodeData>) => {
-      const prevNodes = JSON.parse(JSON.stringify(nodes));
-
       setNodes((nds) => {
+        const prevNodes = JSON.parse(JSON.stringify(nds));
         const newNodes = nds.map((node) => {
           if (node.id === nodeId) {
             return { ...node, data: { ...node.data, ...data } };
@@ -566,24 +583,41 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
     (deleted: Node[]) => {
       if (isUndoRedoRef.current) return;
 
+      // Protect trigger node from deletion
       const nonTriggerDeleted = deleted.filter((n) => (n.data as PlaybookNodeData).stepType !== 'trigger');
-      if (nonTriggerDeleted.length === 0) return;
+      if (nonTriggerDeleted.length === 0) {
+        // If only trigger nodes were in the delete list, restore them
+        setNodes((nds) => {
+          const currentIds = new Set(nds.map(n => n.id));
+          const restoredTriggers = deleted.filter(n =>
+            (n.data as PlaybookNodeData).stepType === 'trigger' && !currentIds.has(n.id)
+          );
+          return restoredTriggers.length > 0 ? [...nds, ...restoredTriggers] : nds;
+        });
+        return;
+      }
 
       const deletedIds = new Set(nonTriggerDeleted.map((n) => n.id));
 
       const prevNodes = prevStateRef.current.nodes;
       const prevEdges = prevStateRef.current.edges;
-      const newNodes = nodes.filter((n) => !deletedIds.has(n.id));
-      const newEdges = edges.filter((e) => !deletedIds.has(e.source) && !deletedIds.has(e.target));
 
-      pushToUndoStack(prevNodes, prevEdges, newNodes, newEdges, 'delete_nodes');
-      prevStateRef.current = { nodes: newNodes, edges: newEdges };
+      setNodes((nds) => {
+        const newNodes = nds.filter((n) => !deletedIds.has(n.id));
+        setEdges((eds) => {
+          const newEdges = eds.filter((e) => !deletedIds.has(e.source) && !deletedIds.has(e.target));
+          pushToUndoStack(prevNodes, prevEdges, newNodes, newEdges, 'delete_nodes');
+          prevStateRef.current = { nodes: newNodes, edges: newEdges };
+          return newEdges;
+        });
+        return newNodes;
+      });
 
       if (selectedNode && deletedIds.has(selectedNode.id)) {
         setSelectedNode(null);
       }
     },
-    [nodes, edges, selectedNode, pushToUndoStack]
+    [selectedNode, pushToUndoStack, setNodes, setEdges]
   );
 
   const onEdgesDelete = useCallback(
@@ -592,12 +626,18 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
 
       const deletedIds = new Set(deleted.map((e) => e.id));
       const prevEdges = prevStateRef.current.edges;
-      const newEdges = edges.filter((e) => !deletedIds.has(e.id));
 
-      pushToUndoStack(nodes, prevEdges, nodes, newEdges, 'delete_edges');
-      prevStateRef.current = { nodes, edges: newEdges };
+      setEdges((eds) => {
+        const newEdges = eds.filter((e) => !deletedIds.has(e.id));
+        setNodes((nds) => {
+          pushToUndoStack(nds, prevEdges, nds, newEdges, 'delete_edges');
+          prevStateRef.current = { nodes: nds, edges: newEdges };
+          return nds; // nodes unchanged
+        });
+        return newEdges;
+      });
     },
-    [nodes, edges, pushToUndoStack]
+    [pushToUndoStack, setNodes, setEdges]
   );
 
   // ═══════════════════════════════════════════════════════════════════════════════
@@ -605,7 +645,8 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
   // ═══════════════════════════════════════════════════════════════════════════════
 
   const selectedNodeCount = useMemo(() => nodes.filter((n) => n.selected).length, [nodes]);
-  const hasSelectedNodes = selectedNodeCount > 0;
+  const selectedEdgeCount = useMemo(() => edges.filter((e) => e.selected).length, [edges]);
+  const hasSelection = selectedNodeCount > 0 || selectedEdgeCount > 0;
 
   return (
     <div className="flex h-full bg-background">
@@ -630,9 +671,12 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
           snapToGrid
           snapGrid={[15, 15]}
           deleteKeyCode={null}
+          edgesFocusable
+          edgesReconnectable
           defaultEdgeOptions={{
             type: 'smoothstep',
             animated: true,
+            selectable: true,
             style: { strokeWidth: 2, stroke: 'hsl(var(--primary))' },
           }}
           proOptions={{ hideAttribution: true }}
@@ -686,12 +730,12 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
             >
               <Redo2 className="h-4 w-4" />
             </Button>
-            {hasSelectedNodes && (
+            {hasSelection && (
               <Button
                 variant="outline"
                 size="icon"
                 className="h-8 w-8 bg-card text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                onClick={deleteSelectedNodes}
+                onClick={deleteSelected}
                 title="Delete selected (Delete)"
               >
                 <Trash2 className="h-4 w-4" />

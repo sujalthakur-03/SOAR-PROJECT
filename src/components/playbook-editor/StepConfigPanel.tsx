@@ -940,6 +940,7 @@ export function StepConfigPanel({ node, playbookId, onClose, onUpdate, nodes = [
             config={config}
             onConfigChange={handleConfigChange}
             getFieldError={getFieldError}
+            nodes={nodes}
           />
         )}
 
@@ -1579,43 +1580,115 @@ function getEnrichmentActions(subtype?: string): { value: string; label: string 
 // CONDITION CONFIG
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Common fields available in trigger data
-const COMMON_FIELDS = [
-  { value: 'trigger_data.severity', label: 'Severity', category: 'trigger' },
-  { value: 'trigger_data.rule_id', label: 'Rule ID', category: 'trigger' },
-  { value: 'trigger_data.rule_name', label: 'Rule Name', category: 'trigger' },
-  { value: 'trigger_data.source_ip', label: 'Source IP', category: 'trigger' },
-  { value: 'trigger_data.destination_ip', label: 'Destination IP', category: 'trigger' },
-  { value: 'trigger_data.username', label: 'Username', category: 'trigger' },
-  { value: 'trigger_data.agent_name', label: 'Agent Name', category: 'trigger' },
-  { value: 'trigger_data.failed_attempts', label: 'Failed Attempts', category: 'trigger' },
-  { value: 'trigger_data.event_count', label: 'Event Count', category: 'trigger' },
-  { value: 'vt_result.malicious_votes', label: 'VT Malicious Votes', category: 'enrichment' },
-  { value: 'abuseipdb_result.abuse_confidence_score', label: 'AbuseIPDB Score', category: 'enrichment' },
-  { value: 'enrichment_result.reputation_score', label: 'Reputation Score', category: 'enrichment' },
-  { value: 'enrichment_result.is_malicious', label: 'Is Malicious', category: 'enrichment' },
-  { value: 'otx_ip_result.pulse_count', label: 'OTX Pulse Count', category: 'enrichment' },
-  { value: 'otx_ip_result.reputation', label: 'OTX Reputation', category: 'enrichment' },
-  { value: 'otx_ip_result.confidence', label: 'OTX Confidence', category: 'enrichment' },
+// Common trigger data fields
+const TRIGGER_FIELDS = [
+  { value: 'trigger_data.severity', label: 'Severity' },
+  { value: 'trigger_data.rule_id', label: 'Rule ID' },
+  { value: 'trigger_data.rule_name', label: 'Rule Name' },
+  { value: 'trigger_data.source_ip', label: 'Source IP' },
+  { value: 'trigger_data.destination_ip', label: 'Destination IP' },
+  { value: 'trigger_data.username', label: 'Username' },
+  { value: 'trigger_data.agent_name', label: 'Agent Name' },
+  { value: 'trigger_data.failed_attempts', label: 'Failed Attempts' },
+  { value: 'trigger_data.event_count', label: 'Event Count' },
 ];
+
+// Output fields produced by each connector type
+const CONNECTOR_OUTPUT_FIELDS: Record<string, { field: string; label: string }[]> = {
+  virustotal: [
+    { field: 'reputation_score', label: 'Reputation Score' },
+    { field: 'is_malicious', label: 'Is Malicious' },
+    { field: 'malicious_votes', label: 'Malicious Votes' },
+    { field: 'total_vendors', label: 'Total Vendors' },
+    { field: 'country', label: 'Country' },
+  ],
+  abuseipdb: [
+    { field: 'abuse_score', label: 'Abuse Score' },
+    { field: 'reputation_score', label: 'Reputation Score' },
+    { field: 'is_malicious', label: 'Is Malicious' },
+    { field: 'country_code', label: 'Country Code' },
+    { field: 'total_reports', label: 'Total Reports' },
+  ],
+  'alienvault-otx': [
+    { field: 'pulse_count', label: 'Pulse Count' },
+    { field: 'reputation', label: 'Reputation' },
+    { field: 'confidence', label: 'Confidence' },
+    { field: 'is_malicious', label: 'Is Malicious' },
+  ],
+  geoip: [
+    { field: 'country', label: 'Country' },
+    { field: 'city', label: 'City' },
+    { field: 'latitude', label: 'Latitude' },
+    { field: 'longitude', label: 'Longitude' },
+  ],
+  dns: [
+    { field: 'hostname', label: 'Hostname' },
+    { field: 'resolved', label: 'Resolved' },
+  ],
+};
+
+// Build flat COMMON_FIELDS list for backward compatibility (isCustomField check)
+const COMMON_FIELDS = [
+  ...TRIGGER_FIELDS.map(f => ({ ...f, category: 'trigger' })),
+];
+
+/**
+ * Derive dynamic step output fields from upstream nodes.
+ * Returns groups like: [{ stepLabel: "VirusTotal IP Lookup", stepId: "node-3", fields: [...] }]
+ */
+function getDynamicStepFields(nodes: Node[]) {
+  const groups: { stepLabel: string; stepId: string; fields: { value: string; label: string }[] }[] = [];
+
+  for (const n of nodes) {
+    const data = n.data as PlaybookNodeData;
+    if (data.stepType !== 'enrichment' && data.stepType !== 'action') continue;
+
+    const cfg = (data.config || {}) as Record<string, unknown>;
+    const connectorId = (cfg.connector_id as string) || '';
+    const stepLabel = data.label || connectorId || n.id;
+
+    // Try to find output fields from CONNECTOR_OUTPUT_FIELDS map
+    const outputFields = CONNECTOR_OUTPUT_FIELDS[connectorId];
+    if (outputFields && outputFields.length > 0) {
+      groups.push({
+        stepLabel,
+        stepId: n.id,
+        fields: outputFields.map(of => ({
+          value: `steps.${n.id}.output.${of.field}`,
+          label: of.label,
+        })),
+      });
+    }
+  }
+
+  return groups;
+}
 
 function ConditionConfig({
   subtype,
   config,
   onConfigChange,
-  getFieldError
+  getFieldError,
+  nodes = []
 }: {
   subtype?: string;
   config: Record<string, unknown>;
   onConfigChange: (key: string, value: unknown) => void;
   getFieldError: (field: string) => string | undefined;
+  nodes?: Node[];
 }) {
   const [useCustomField, setUseCustomField] = useState(false);
   const defaultField = getDefaultConditionField(subtype);
   const currentField = (config.field as string) || defaultField;
 
-  // Check if current field is in the common fields list
-  const isCustomField = currentField && !COMMON_FIELDS.some(f => f.value === currentField);
+  // Build dynamic step output fields from upstream nodes
+  const stepGroups = getDynamicStepFields(nodes);
+  const allDynamicValues = stepGroups.flatMap(g => g.fields.map(f => f.value));
+
+  // Check if current field is in any known field list
+  const isKnownField = COMMON_FIELDS.some(f => f.value === currentField) ||
+    allDynamicValues.includes(currentField);
+  const isCustomField = currentField && !isKnownField;
 
   return (
     <>
@@ -1635,7 +1708,7 @@ function ConditionConfig({
           <Input
             value={currentField}
             onChange={(e) => onConfigChange('field', e.target.value)}
-            placeholder="e.g., trigger_data.custom_field"
+            placeholder="e.g., steps.node-3.output.reputation_score"
             className={getFieldError('field') ? 'border-destructive' : ''}
           />
         ) : (
@@ -1648,14 +1721,30 @@ function ConditionConfig({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__select__" disabled>Select a field...</SelectItem>
+
+              {/* Trigger Data fields */}
               <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">Trigger Data</div>
-              {COMMON_FIELDS.filter(f => f.category === 'trigger').map(f => (
+              {TRIGGER_FIELDS.map(f => (
                 <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
               ))}
-              <div className="px-2 py-1 text-xs font-semibold text-muted-foreground mt-1">Enrichment Results</div>
-              {COMMON_FIELDS.filter(f => f.category === 'enrichment').map(f => (
-                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+
+              {/* Dynamic step output fields */}
+              {stepGroups.map(group => (
+                <div key={group.stepId}>
+                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground mt-1 border-t border-border pt-2">
+                    {group.stepLabel} <span className="text-[10px] opacity-60">({group.stepId})</span>
+                  </div>
+                  {group.fields.map(f => (
+                    <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                  ))}
+                </div>
               ))}
+
+              {/* Custom option at bottom */}
+              <div className="px-2 py-1 text-xs font-semibold text-muted-foreground mt-1 border-t border-border pt-2">Custom</div>
+              <SelectItem value="__custom__" onPointerUp={() => setUseCustomField(true)}>
+                Enter custom field path...
+              </SelectItem>
             </SelectContent>
           </Select>
         )}
@@ -1741,11 +1830,11 @@ function ConditionConfig({
 
 function getDefaultConditionField(subtype?: string): string {
   switch (subtype) {
-    case 'severity_threshold': return 'severity';
-    case 'match_field': return 'rule_id';
-    case 'failed_attempts': return 'failed_attempts';
-    case 'time_window': return 'event_count';
-    case 'reputation_check': return 'enrichment.reputation_score';
+    case 'severity_threshold': return 'trigger_data.severity';
+    case 'match_field': return 'trigger_data.rule_id';
+    case 'failed_attempts': return 'trigger_data.failed_attempts';
+    case 'time_window': return 'trigger_data.event_count';
+    case 'reputation_check': return '';
     default: return '';
   }
 }
