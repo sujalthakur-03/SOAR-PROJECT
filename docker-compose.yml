@@ -5,10 +5,7 @@
 # Services:
 #   soar-database   — MongoDB 7.0 (persistent volume)
 #   soar-backend    — Node.js Express API + Execution Engine (port 3001)
-#   soar-frontend   — React + Vite production build (port 3000)
-#
-# NOT included:
-#   forwarder       — Runs on the Wazuh server, not in Docker
+#   soar-frontend   — React + nginx production build (port 3000)
 #
 # Usage:
 #   docker compose up -d --build
@@ -23,7 +20,7 @@ services:
   # MongoDB — soar-database
   # ─────────────────────────────────────────────────────────────────────────
   soar-database:
-    image: mongo:7.0
+    image: ghcr.io/cybersentinel-06/cybersentinel-soar-database:latest
     container_name: soar-database
     environment:
       MONGO_INITDB_DATABASE: cybersentinel
@@ -46,6 +43,7 @@ services:
   # Backend API + Execution Engine — soar-backend
   # ─────────────────────────────────────────────────────────────────────────
   soar-backend:
+    image: ghcr.io/cybersentinel-06/cybersentinel-soar-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -73,6 +71,7 @@ services:
   # Frontend — soar-frontend
   # ─────────────────────────────────────────────────────────────────────────
   soar-frontend:
+    image: ghcr.io/cybersentinel-06/cybersentinel-soar-frontend:latest
     build:
       context: .
       dockerfile: Dockerfile
