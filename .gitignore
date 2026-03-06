@@ -40,11 +40,5 @@ ACCESS_INFO.txt
 !README.md
 !backend/README.md
 
-# ── Deployment scripts ──
-*.sh
-
 # ── Loose SQL scripts (keep supabase/migrations/) ──
 /*.sql
-
-# ── Forwarder (deployed separately on Wazuh server) ──
-forwarder/

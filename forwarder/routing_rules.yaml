@@ -1,0 +1,203 @@
+# CyberSentinel Forwarder - Routing Rules Configuration
+# =====================================================
+#
+# This file defines how alerts from CyberSentinel EDR are routed to SOAR playbooks.
+# Each rule specifies matching conditions and target webhook(s).
+#
+# SCHEMA:
+# -------
+# rules:
+#   - name: <string>              # Human-readable rule name
+#     enabled: <bool>             # Enable/disable this rule (default: true)
+#     priority: <int>             # Lower = higher priority (default: 100)
+#     match:                      # Matching conditions (ALL must match)
+#       <field>:                  # Field path (supports dot notation)
+#         - <value1>              # List of acceptable values (OR logic)
+#         - <value2>
+#     match_any:                  # Alternative: ANY condition matches (OR logic)
+#       - <field>: <values>
+#     forward_to:                 # Target webhook(s)
+#       - webhook_url: <url>      # Full webhook URL with secret
+#         headers: {}             # Optional additional headers
+#         timeout: <seconds>      # Request timeout (default: 30)
+#
+# FIELD MATCHING:
+# ---------------
+# - Exact match: field: ["value1", "value2"]
+# - Regex match: field: ["regex:^pattern.*"]
+# - Numeric comparison: field: ["gt:10", "lt:100"]
+# - Exists check: field: ["exists:true"]
+# - Nested fields: "data.source.ip": ["192.168.1.1"]
+#
+# EXAMPLE ALERT STRUCTURE (CyberSentinel EDR):
+# --------------------------------------------
+# {
+#   "timestamp": "2026-01-16T10:30:00Z",
+#   "rule": {
+#     "id": "5710",
+#     "name": "SSH Brute Force Attempt",
+#     "level": 10
+#   },
+#   "agent": {
+#     "id": "001",
+#     "name": "web-server-01",
+#     "ip": "10.0.0.5"
+#   },
+#   "data": {
+#     "source_ip": "192.168.1.100",
+#     "destination_ip": "10.0.0.5",
+#     "protocol": "ssh"
+#   },
+#   "severity": "high"
+# }
+
+# =============================================================================
+# ROUTING RULES
+# =============================================================================
+
+rules:
+  # -------------------------------------------------------------------------
+  # Rule 1: SSH Brute Force Detection
+  # Routes high-severity SSH attacks to the brute force response playbook
+  # -------------------------------------------------------------------------
+  - name: "SSH Brute Force Response"
+    enabled: true
+    priority: 10
+    match:
+      "rule.id":
+        - "5710"      # SSH brute force
+        - "5712"      # SSH authentication failure
+        - "5720"      # Multiple SSH failures
+      severity:
+        - "high"
+        - "critical"
+    forward_to:
+      - webhook_url: "${SOAR_BASE_URL}/api/webhooks/${PB_BRUTE_FORCE_ID}/${PB_BRUTE_FORCE_SECRET}"
+        timeout: 30
+
+  # -------------------------------------------------------------------------
+  # Rule 2: Malware Detection
+  # Routes malware alerts to both containment and notification playbooks
+  # -------------------------------------------------------------------------
+  - name: "Malware Detection Response"
+    enabled: true
+    priority: 5
+    match:
+      "rule.id":
+        - "87100"     # Malware detected
+        - "87101"     # Ransomware signature
+        - "87102"     # Trojan detected
+      severity:
+        - "critical"
+    forward_to:
+      # Primary: Containment playbook
+      - webhook_url: "${SOAR_BASE_URL}/api/webhooks/${PB_MALWARE_CONTAINMENT_ID}/${PB_MALWARE_CONTAINMENT_SECRET}"
+        timeout: 30
+      # Secondary: Executive notification
+      - webhook_url: "${SOAR_BASE_URL}/api/webhooks/${PB_EXEC_NOTIFY_ID}/${PB_EXEC_NOTIFY_SECRET}"
+        timeout: 10
+
+  # -------------------------------------------------------------------------
+  # Rule 3: Privilege Escalation
+  # Routes privilege escalation attempts to investigation playbook
+  # -------------------------------------------------------------------------
+  - name: "Privilege Escalation Detection"
+    enabled: true
+    priority: 15
+    match:
+      "rule.id":
+        - "5401"      # sudo command
+        - "5402"      # su command
+        - "5501"      # PAM authentication failure
+      "rule.level":
+        - "gt:8"      # Level greater than 8
+    forward_to:
+      - webhook_url: "${SOAR_BASE_URL}/api/webhooks/${PB_PRIV_ESC_ID}/${PB_PRIV_ESC_SECRET}"
+        timeout: 30
+
+  # -------------------------------------------------------------------------
+  # Rule 4: Network Anomaly Detection
+  # Routes network anomalies using regex matching
+  # -------------------------------------------------------------------------
+  - name: "Network Anomaly Response"
+    enabled: true
+    priority: 20
+    match:
+      "rule.id":
+        - "regex:^8[0-9]{4}$"   # Rules 80000-89999 (network category)
+      severity:
+        - "medium"
+        - "high"
+        - "critical"
+    forward_to:
+      - webhook_url: "${SOAR_BASE_URL}/api/webhooks/${PB_NETWORK_ANOMALY_ID}/${PB_NETWORK_ANOMALY_SECRET}"
+        timeout: 30
+
+  # -------------------------------------------------------------------------
+  # Rule 5: Critical Infrastructure Alerts
+  # Routes any critical alert from specific agents
+  # -------------------------------------------------------------------------
+  - name: "Critical Infrastructure Monitoring"
+    enabled: true
+    priority: 1
+    match:
+      "agent.name":
+        - "regex:^(db-|prod-|core-).*"
+      severity:
+        - "critical"
+    forward_to:
+      - webhook_url: "${SOAR_BASE_URL}/api/webhooks/${PB_CRITICAL_INFRA_ID}/${PB_CRITICAL_INFRA_SECRET}"
+        timeout: 30
+        headers:
+          X-Priority: "critical"
+          X-Source: "cybersentinel-forwarder"
+
+  # -------------------------------------------------------------------------
+  # Rule 6: SSH Failed Login (rule.id 120000)
+  # Routes SSH failed login alerts to the SSH Failed Login response playbook
+  # Playbook: PB-MKWI1FNL-B18C1F (VirusTotal enrichment → Condition → Block → Notify)
+  # -------------------------------------------------------------------------
+  - name: "SSH Failed Login Response"
+    enabled: true
+    priority: 8
+    match:
+      "rule.id":
+        - "120000"    # SSH failed login
+    forward_to:
+      - webhook_url: "http://192.168.1.122:3001/api/webhooks/WH-ML1UXE6D12E104B5/24e23d8e82e9f0fd3027b893e7e449f3655dbfd58aee4cfcff388a581e32d1ea"
+        timeout: 30
+        headers:
+          X-CyberSentinel-Timestamp: "${EPOCH_TIMESTAMP}"
+          X-Source: "cybersentinel-forwarder"
+
+  # -------------------------------------------------------------------------
+  # Rule 7: Catch-All for High Severity
+  # Low priority catch-all for any high severity alerts not matched above
+  # -------------------------------------------------------------------------
+  - name: "High Severity Catch-All"
+    enabled: true
+    priority: 1000
+    match:
+      severity:
+        - "high"
+        - "critical"
+    forward_to:
+      - webhook_url: "${SOAR_BASE_URL}/api/webhooks/${PB_GENERIC_HIGH_ID}/${PB_GENERIC_HIGH_SECRET}"
+        timeout: 30
+
+# =============================================================================
+# GLOBAL SETTINGS
+# =============================================================================
+
+settings:
+  # Continue processing rules after first match (default: false = stop on first match)
+  continue_on_match: false
+
+  # Default timeout for webhook requests (seconds)
+  default_timeout: 30
+
+  # Maximum concurrent webhook requests
+  max_concurrent: 10
+
+  # Enable detailed logging
+  verbose_logging: false

@@ -1,0 +1,11 @@
+# CyberSentinel Forwarder Dependencies
+# =====================================
+
+# Async HTTP client
+aiohttp>=3.9.0
+
+# YAML parsing
+PyYAML>=6.0
+
+# Type hints (Python 3.8 compatibility)
+typing-extensions>=4.0.0
