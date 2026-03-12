@@ -18,6 +18,10 @@ COPY index.html tsconfig*.json vite.config.ts postcss.config.js tailwind.config.
 COPY src/ ./src/
 COPY public/ ./public/
 
+# Accept backend port as build arg (default 3001)
+ARG VITE_BACKEND_PORT=3001
+ENV VITE_BACKEND_PORT=${VITE_BACKEND_PORT}
+
 RUN npm run build
 
 # --- Stage 2: Serve ---

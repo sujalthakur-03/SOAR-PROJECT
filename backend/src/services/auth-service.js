@@ -14,9 +14,9 @@ const JWT_EXPIRY = '24h';
 const users = [
   {
     id: 'admin-001',
-    username: 'admin',
-    // Password: admin (bcrypt hash)
-    passwordHash: '$2b$10$SiO0XoiK9iQKvnohtjvBeeNbQ2A/1AyineX21H4mboftLR9guLLU.',
+    username: 'soaradmin',
+    // Password: CyberSentinelSOAR@2026 (bcrypt hash)
+    passwordHash: '$2b$10$n75HIAo7TQhV0n/O10C33eZEWoOtcBwL670M.Jd./lnPcTpdk1ngu',
     email: 'admin@cybersentinel.local',
     fullName: 'System Administrator',
     role: 'admin',

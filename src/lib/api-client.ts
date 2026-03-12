@@ -9,14 +9,19 @@
 /**
  * Get the backend base URL dynamically based on current hostname
  * This ensures the frontend works regardless of how it's accessed (localhost, IP, domain)
+ *
+ * Backend port is set at build time via VITE_BACKEND_PORT (default: 3001).
+ * This allows the deploy script to assign an available port when 3001 is busy.
  */
+const BACKEND_PORT = import.meta.env.VITE_BACKEND_PORT || '3001';
+
 export const getBackendBaseUrl = (): string => {
   if (typeof window !== 'undefined') {
-    // In browser: use same hostname as frontend, but backend port 3001
-    return `http://${window.location.hostname}:3001`;
+    // In browser: use same hostname as frontend, dynamic backend port
+    return `http://${window.location.hostname}:${BACKEND_PORT}`;
   }
   // Fallback for SSR/testing
-  return 'http://localhost:3001';
+  return `http://localhost:${BACKEND_PORT}`;
 };
 
 const API_BASE_URL = '/api';

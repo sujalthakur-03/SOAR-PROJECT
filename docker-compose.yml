@@ -4,8 +4,12 @@
 #
 # Services:
 #   soar-database   — MongoDB 7.0 (persistent volume)
-#   soar-backend    — Node.js Express API + Execution Engine (port 3001)
-#   soar-frontend   — React + nginx production build (port 3000)
+#   soar-backend    — Node.js Express API + Execution Engine
+#   soar-frontend   — React + Vite production build
+#
+# Port Configuration:
+#   Set FRONTEND_PORT and BACKEND_PORT env vars before running, or use defaults.
+#   Example: FRONTEND_PORT=3002 BACKEND_PORT=3012 docker-compose up -d
 #
 # Usage:
 #   docker compose up -d --build
@@ -57,7 +61,7 @@ services:
       NODE_ENV: production
       PORT: "3001"
     ports:
-      - "3001:3001"
+      - "${BACKEND_PORT:-3001}:3001"
     volumes:
       - soar-backend-logs:/app/logs
     networks:
@@ -75,9 +79,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_PORT: "${BACKEND_PORT:-3001}"
     container_name: soar-frontend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     networks:
       - soar-network
     depends_on:
