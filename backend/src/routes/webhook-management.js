@@ -241,8 +241,8 @@ router.get('/playbooks/:playbook_id/webhook', async (req, res) => {
 
     const playbookIdToUse = playbook.playbook_id || playbook_id;
 
-    // Find webhook
-    const webhook = await Webhook.findByPlaybookId(playbookIdToUse);
+    // Find webhook (include secret to build full URL)
+    const webhook = await Webhook.findOne({ playbook_id: playbookIdToUse }).select('+secret');
 
     if (!webhook) {
       return res.status(404).json({
@@ -253,11 +253,11 @@ router.get('/playbooks/:playbook_id/webhook', async (req, res) => {
 
     const baseUrl = getBaseUrl(req);
 
-    // Return metadata (NO secret)
+    // Return full URL with secret so analysts can always copy it
     return res.json({
       webhook_id: webhook.webhook_id,
       playbook_id: webhook.playbook_id,
-      url: `${baseUrl}/api/webhooks/${webhook.webhook_id}/<secret>`,
+      url: `${baseUrl}/api/webhooks/${webhook.webhook_id}/${webhook.secret}`,
       enabled: webhook.enabled,
       status: webhook.status,
       secret_prefix: webhook.secret_prefix,

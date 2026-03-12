@@ -1278,11 +1278,12 @@ function TriggerConfig({
             </div>
           )}
 
-          {/* Existing webhook (masked) */}
+          {/* Existing webhook (full URL visible) */}
           {!freshWebhookUrl && webhookExists && (
-            <div className="space-y-2 p-3 rounded-lg bg-muted/50 border border-border">
+            <div className="space-y-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                   <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
                     Active
                   </Badge>
@@ -1294,12 +1295,28 @@ function TriggerConfig({
                 </div>
               </div>
               {webhookData.url && (
-                <code className="block text-[10px] bg-background px-2 py-1.5 rounded border font-mono break-all text-muted-foreground">
-                  {webhookData.url}
-                </code>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-[10px] bg-background px-2 py-1.5 rounded border font-mono break-all leading-relaxed">
+                    {webhookData.url}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    onClick={() => {
+                      copyToClipboard(webhookData.url).then(
+                        () => toast({ title: 'Webhook URL copied' }),
+                        () => toast({ title: 'Failed to copy', variant: 'destructive' })
+                      );
+                    }}
+                    title="Copy Webhook URL"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               )}
               <p className="text-[10px] text-muted-foreground">
-                Webhook is active. Secret is masked for security.
+                Use this URL in your forwarder's <code className="bg-muted px-1 rounded">routing_rules.yaml</code>
               </p>
             </div>
           )}
