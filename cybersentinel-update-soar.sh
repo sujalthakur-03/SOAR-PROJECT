@@ -2,15 +2,15 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # CyberSentinel SOAR v3.0 — Update Script
 # ══════════════════════════════════════════════════════════════════════════════
-# Pulls latest changes from the GitHub repo and redeploys updated services.
-# Only rebuilds images for services that actually changed.
+# Pulls latest Docker images from GHCR and redeploys if any image has changed.
+# Works on any server — no source code or git needed, only Docker + GHCR.
 #
 # Usage:
 #   chmod +x cybersentinel-update-soar.sh
 #   ./cybersentinel-update-soar.sh
 #
 # Environment:
-#   GHCR_TOKEN  — GitHub PAT with repo + read:packages scope (prompted if not set)
+#   GHCR_TOKEN  — GitHub PAT with read:packages scope (prompted if not set)
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -24,8 +24,17 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 GHCR_ORG="cybersentinel-06"
-REPO_NAME="CyberSentinel-SOAR"
 DEPLOY_DIR="/opt/cybersentinel-soar"
+REPO_NAME="CyberSentinel-SOAR"
+
+IMAGES=(
+  "ghcr.io/${GHCR_ORG}/cybersentinel-soar-frontend:latest"
+  "ghcr.io/${GHCR_ORG}/cybersentinel-soar-backend:latest"
+  "ghcr.io/${GHCR_ORG}/cybersentinel-soar-database:latest"
+)
+
+# Track what changed
+IMAGES_UPDATED=()
 
 # ── Helper Functions ─────────────────────────────────────────────────────────
 
@@ -43,15 +52,20 @@ fail_exit() {
   exit 1
 }
 
+# Get short image name from full GHCR path
+short_name() {
+  echo "$1" | sed 's|ghcr.io/.*/||; s|:latest||'
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 1: Authenticate
 # ══════════════════════════════════════════════════════════════════════════════
 step_authenticate() {
   separator
-  log_info "Step 1/6 — Authenticating"
+  log_info "Step 1/5 — Authenticating"
 
   if [ -z "${GHCR_TOKEN:-}" ]; then
-    echo -en "${CYAN}Enter your GitHub PAT: ${NC}"
+    echo -en "${CYAN}Enter your GitHub PAT (with read:packages scope): ${NC}"
     read -rs GHCR_TOKEN
     echo
   fi
@@ -69,6 +83,10 @@ step_authenticate() {
   else
     fail_exit "Token invalid (HTTP ${HTTP_CODE})"
   fi
+
+  # Login to GHCR
+  echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_ORG}" --password-stdin 2>/dev/null
+  log_ok "Logged in to GHCR"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -76,7 +94,7 @@ step_authenticate() {
 # ══════════════════════════════════════════════════════════════════════════════
 step_preflight() {
   separator
-  log_info "Step 2/6 — Pre-flight checks"
+  log_info "Step 2/5 — Pre-flight checks"
 
   # Check Docker
   command -v docker &>/dev/null || fail_exit "Docker not installed"
@@ -93,167 +111,89 @@ step_preflight() {
   fi
   log_ok "Docker Compose available"
 
-  # Check git
-  command -v git &>/dev/null || fail_exit "Git not installed"
-  log_ok "Git available"
-
-  # Check deploy directory
+  # Check deploy directory and docker-compose.yml
   if [ ! -d "${DEPLOY_DIR}" ]; then
     fail_exit "${DEPLOY_DIR} does not exist. Run cybersentinel-deploy-soar.sh first."
   fi
+
+  if [ ! -f "${DEPLOY_DIR}/docker-compose.yml" ]; then
+    log_warn "docker-compose.yml missing — pulling from repo..."
+    command -v git &>/dev/null || fail_exit "Git not installed (needed to fetch docker-compose.yml)"
+    REPO_URL="https://${GHCR_TOKEN}@github.com/${GHCR_ORG}/${REPO_NAME}.git"
+    git clone --depth 1 "${REPO_URL}" /tmp/cs-update 2>/dev/null || fail_exit "Failed to clone repo"
+    cp /tmp/cs-update/docker-compose.yml "${DEPLOY_DIR}/"
+    cp /tmp/cs-update/cybersentinel-update-soar.sh "${DEPLOY_DIR}/" 2>/dev/null || true
+    cp /tmp/cs-update/cybersentinel-deploy-soar.sh "${DEPLOY_DIR}/" 2>/dev/null || true
+    rm -rf /tmp/cs-update
+    log_ok "docker-compose.yml fetched"
+  fi
+
   log_ok "Deploy directory: ${DEPLOY_DIR}"
+
+  # Show currently running containers
+  RUNNING=$(docker ps --format "{{.Names}}" --filter "name=soar-" 2>/dev/null | sort | tr '\n' ', ' | sed 's/,$//')
+  if [ -n "$RUNNING" ]; then
+    log_info "Running containers: ${RUNNING}"
+  else
+    log_warn "No CyberSentinel containers currently running"
+  fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 3: Pull latest code from repo
+# Step 3: Pull latest images & detect changes
 # ══════════════════════════════════════════════════════════════════════════════
-step_pull_code() {
+step_pull_images() {
   separator
-  log_info "Step 3/6 — Pulling latest code from GitHub"
+  log_info "Step 3/5 — Pulling latest images from GHCR"
 
-  cd "${DEPLOY_DIR}"
+  for IMAGE in "${IMAGES[@]}"; do
+    NAME=$(short_name "$IMAGE")
 
-  REPO_URL="https://${GHCR_TOKEN}@github.com/${GHCR_ORG}/${REPO_NAME}.git"
+    # Get current local digest (if image exists)
+    OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null | cut -d@ -f2 || echo "none")
 
-  # If not a git repo yet, clone it
-  if [ ! -d ".git" ]; then
-    log_info "No git repo found — cloning fresh..."
-    cd /tmp
-    rm -rf "${REPO_NAME}-update"
-    git clone --depth 1 "${REPO_URL}" "${REPO_NAME}-update" 2>/dev/null || \
-      fail_exit "Failed to clone repo"
+    # Pull latest
+    log_info "Pulling ${BOLD}${NAME}${NC}..."
+    docker pull "$IMAGE" 2>&1 | tail -1
 
-    # Copy new files without overwriting backend/.env
-    rsync -a --exclude='backend/.env' "${REPO_NAME}-update/" "${DEPLOY_DIR}/"
-    rm -rf "${REPO_NAME}-update"
-    cd "${DEPLOY_DIR}"
-    log_ok "Fresh clone applied to ${DEPLOY_DIR}"
-    CHANGES_DETECTED="full"
-    return
-  fi
+    # Get new digest
+    NEW_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null | cut -d@ -f2 || echo "unknown")
 
-  # Store current commit for comparison
-  OLD_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-  log_info "Current commit: ${OLD_COMMIT:0:8}"
-
-  # Set remote URL (in case token changed)
-  git remote set-url origin "${REPO_URL}" 2>/dev/null || \
-    git remote add origin "${REPO_URL}" 2>/dev/null || true
-
-  # Stash any local changes (like backend/.env being tracked accidentally)
-  git stash --include-untracked 2>/dev/null || true
-
-  # Pull latest
-  git fetch origin main 2>/dev/null || fail_exit "Failed to fetch from origin"
-  git reset --hard origin/main 2>/dev/null || fail_exit "Failed to reset to origin/main"
-
-  NEW_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-  log_info "Latest commit:  ${NEW_COMMIT:0:8}"
-
-  if [ "$OLD_COMMIT" = "$NEW_COMMIT" ]; then
-    log_ok "Already up to date — no changes detected"
-    CHANGES_DETECTED="none"
-  else
-    # Detect what changed
-    CHANGED_FILES=$(git diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" 2>/dev/null || echo "")
-    CHANGES_DETECTED="none"
-
-    FRONTEND_CHANGED=false
-    BACKEND_CHANGED=false
-
-    if echo "$CHANGED_FILES" | grep -qE "^(src/|Dockerfile|package|vite\.config|index\.html|tsconfig|postcss|tailwind)"; then
-      FRONTEND_CHANGED=true
-    fi
-
-    if echo "$CHANGED_FILES" | grep -qE "^backend/"; then
-      BACKEND_CHANGED=true
-    fi
-
-    if [ "$FRONTEND_CHANGED" = true ] && [ "$BACKEND_CHANGED" = true ]; then
-      CHANGES_DETECTED="both"
-    elif [ "$FRONTEND_CHANGED" = true ]; then
-      CHANGES_DETECTED="frontend"
-    elif [ "$BACKEND_CHANGED" = true ]; then
-      CHANGES_DETECTED="backend"
+    if [ "$OLD_DIGEST" = "none" ]; then
+      log_ok "${NAME} — ${GREEN}new image pulled${NC}"
+      IMAGES_UPDATED+=("$NAME")
+    elif [ "$OLD_DIGEST" != "$NEW_DIGEST" ]; then
+      log_ok "${NAME} — ${YELLOW}updated${NC} (digest changed)"
+      IMAGES_UPDATED+=("$NAME")
     else
-      CHANGES_DETECTED="config"
+      log_ok "${NAME} — already up to date"
     fi
+  done
 
-    log_ok "Changes pulled successfully"
-    echo ""
-    log_info "Changed files:"
-    echo "$CHANGED_FILES" | head -20 | while read -r f; do
-      echo -e "    ${CYAN}${f}${NC}"
-    done
-    TOTAL_CHANGED=$(echo "$CHANGED_FILES" | wc -l)
-    if [ "$TOTAL_CHANGED" -gt 20 ]; then
-      echo -e "    ${YELLOW}... and $((TOTAL_CHANGED - 20)) more${NC}"
-    fi
-    echo ""
-    log_info "Affected services: ${BOLD}${CHANGES_DETECTED}${NC}"
+  echo ""
+  if [ ${#IMAGES_UPDATED[@]} -eq 0 ]; then
+    log_ok "All images are already up to date"
+  else
+    log_info "Updated images: ${BOLD}${IMAGES_UPDATED[*]}${NC}"
   fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 4: Rebuild changed images
-# ══════════════════════════════════════════════════════════════════════════════
-step_rebuild() {
-  separator
-  log_info "Step 4/6 — Rebuilding Docker images"
-
-  cd "${DEPLOY_DIR}"
-
-  if [ "$CHANGES_DETECTED" = "none" ]; then
-    log_ok "No changes — skipping rebuild"
-    return
-  fi
-
-  # Login to GHCR
-  echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_ORG}" --password-stdin 2>/dev/null
-  log_ok "Logged in to GHCR"
-
-  if [ "$CHANGES_DETECTED" = "backend" ] || [ "$CHANGES_DETECTED" = "both" ] || [ "$CHANGES_DETECTED" = "full" ]; then
-    log_info "Building backend image..."
-    docker build --no-cache -t ghcr.io/${GHCR_ORG}/cybersentinel-soar-backend:latest \
-      -f backend/Dockerfile backend/ 2>&1 | tail -3
-    log_ok "Backend image rebuilt"
-
-    log_info "Pushing backend image to GHCR..."
-    docker push ghcr.io/${GHCR_ORG}/cybersentinel-soar-backend:latest 2>&1 | tail -1
-    log_ok "Backend image pushed"
-  else
-    log_info "Backend unchanged — skipping"
-  fi
-
-  if [ "$CHANGES_DETECTED" = "frontend" ] || [ "$CHANGES_DETECTED" = "both" ] || [ "$CHANGES_DETECTED" = "full" ]; then
-    log_info "Building frontend image (this may take a few minutes)..."
-    docker build --no-cache -t ghcr.io/${GHCR_ORG}/cybersentinel-soar-frontend:latest \
-      -f Dockerfile . 2>&1 | tail -3
-    log_ok "Frontend image rebuilt"
-
-    log_info "Pushing frontend image to GHCR..."
-    docker push ghcr.io/${GHCR_ORG}/cybersentinel-soar-frontend:latest 2>&1 | tail -1
-    log_ok "Frontend image pushed"
-  else
-    log_info "Frontend unchanged — skipping"
-  fi
-}
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Step 5: Redeploy containers
+# Step 4: Redeploy containers
 # ══════════════════════════════════════════════════════════════════════════════
 step_redeploy() {
   separator
-  log_info "Step 5/6 — Redeploying services"
+  log_info "Step 4/5 — Redeploying services"
 
-  cd "${DEPLOY_DIR}"
-
-  if [ "$CHANGES_DETECTED" = "none" ]; then
-    log_ok "No changes — skipping redeploy"
+  if [ ${#IMAGES_UPDATED[@]} -eq 0 ]; then
+    log_ok "No image changes — skipping redeploy"
+    log_info "To force redeploy, run: ${YELLOW}${COMPOSE_CMD} up -d --force-recreate${NC}"
     return
   fi
 
-  # Read current port config if containers are running
+  cd "${DEPLOY_DIR}"
+
+  # Preserve current port assignments from running containers
   FRONTEND_PORT=$(docker port soar-frontend 3000 2>/dev/null | cut -d: -f2 || echo "3000")
   BACKEND_PORT=$(docker port soar-backend 3001 2>/dev/null | cut -d: -f2 || echo "3001")
   [ -z "$FRONTEND_PORT" ] && FRONTEND_PORT=3000
@@ -261,12 +201,12 @@ step_redeploy() {
 
   export FRONTEND_PORT BACKEND_PORT
 
-  # Stop and remove old containers to avoid ContainerConfig bug
+  # Stop and remove old containers
   log_info "Stopping current containers..."
   ${COMPOSE_CMD} down --remove-orphans 2>/dev/null || true
   docker rm -f soar-frontend soar-backend soar-database 2>/dev/null || true
 
-  # Start fresh
+  # Start fresh with new images
   log_info "Starting updated services (Frontend:${FRONTEND_PORT}, Backend:${BACKEND_PORT})..."
   FRONTEND_PORT="${FRONTEND_PORT}" BACKEND_PORT="${BACKEND_PORT}" ${COMPOSE_CMD} up -d
 
@@ -278,11 +218,20 @@ step_redeploy() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6: Health check & summary
+# Step 5: Health check & summary
 # ══════════════════════════════════════════════════════════════════════════════
 step_verify() {
   separator
-  log_info "Step 6/6 — Health check"
+  log_info "Step 5/5 — Health check"
+
+  # Skip health check if nothing was redeployed
+  if [ ${#IMAGES_UPDATED[@]} -eq 0 ]; then
+    log_ok "No changes — nothing to verify"
+    echo ""
+    echo -e "${GREEN}${BOLD}  All images are already at the latest version.${NC}"
+    echo ""
+    return
+  fi
 
   MAX_WAIT=90
   ELAPSED=0
@@ -306,7 +255,7 @@ step_verify() {
   echo ""
 
   SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
-  NEW_COMMIT=$(cd "${DEPLOY_DIR}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  UPDATED_LIST="${IMAGES_UPDATED[*]}"
 
   if [ "$ALL_HEALTHY" = true ]; then
     separator
@@ -315,12 +264,11 @@ step_verify() {
     echo -e "${GREEN}${BOLD}  ║          CyberSentinel SOAR — Update Complete                ║${NC}"
     echo -e "${GREEN}${BOLD}  ╠══════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${GREEN}${BOLD}  ║${NC}                                                              ${GREEN}${BOLD}║${NC}"
-    echo -e "${GREEN}${BOLD}  ║${NC}  Commit   → ${CYAN}${NEW_COMMIT}${NC}                                            ${GREEN}${BOLD}║${NC}"
-    echo -e "${GREEN}${BOLD}  ║${NC}  Updated  → ${CYAN}${CHANGES_DETECTED}${NC}$(printf '%*s' $((40 - ${#CHANGES_DETECTED})) '')${GREEN}${BOLD}║${NC}"
+    echo -e "${GREEN}${BOLD}  ║${NC}  Updated  → ${CYAN}${UPDATED_LIST}${NC}$(printf '%*s' $((40 - ${#UPDATED_LIST})) '' 2>/dev/null)${GREEN}${BOLD}║${NC}"
     echo -e "${GREEN}${BOLD}  ║${NC}  Status   → ${GREEN}All services healthy${NC}                            ${GREEN}${BOLD}║${NC}"
     echo -e "${GREEN}${BOLD}  ║${NC}                                                              ${GREEN}${BOLD}║${NC}"
-    echo -e "${GREEN}${BOLD}  ║${NC}  Frontend → ${CYAN}http://${SERVER_IP}:${FRONTEND_PORT}${NC}$(printf '%*s' $((24 - ${#SERVER_IP} - ${#FRONTEND_PORT})) '')${GREEN}${BOLD}║${NC}"
-    echo -e "${GREEN}${BOLD}  ║${NC}  Backend  → ${CYAN}http://${SERVER_IP}:${BACKEND_PORT}${NC}$(printf '%*s' $((24 - ${#SERVER_IP} - ${#BACKEND_PORT})) '')${GREEN}${BOLD}║${NC}"
+    echo -e "${GREEN}${BOLD}  ║${NC}  Frontend → ${CYAN}http://${SERVER_IP}:${FRONTEND_PORT}${NC}$(printf '%*s' $((24 - ${#SERVER_IP} - ${#FRONTEND_PORT})) '' 2>/dev/null)${GREEN}${BOLD}║${NC}"
+    echo -e "${GREEN}${BOLD}  ║${NC}  Backend  → ${CYAN}http://${SERVER_IP}:${BACKEND_PORT}${NC}$(printf '%*s' $((24 - ${#SERVER_IP} - ${#BACKEND_PORT})) '' 2>/dev/null)${GREEN}${BOLD}║${NC}"
     echo -e "${GREEN}${BOLD}  ║${NC}                                                              ${GREEN}${BOLD}║${NC}"
     echo -e "${GREEN}${BOLD}  ╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -339,12 +287,9 @@ echo ""
 echo -e "${BOLD}  CyberSentinel SOAR v3.0 — Update Script${NC}"
 echo ""
 
-CHANGES_DETECTED="none"
-
 step_authenticate
 step_preflight
-step_pull_code
-step_rebuild
+step_pull_images
 step_redeploy
 step_verify
 
