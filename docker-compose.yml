@@ -32,7 +32,7 @@ services:
       - soar-db-data:/data/db
       - soar-db-config:/data/configdb
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     networks:
       - soar-network
     healthcheck:
@@ -42,6 +42,15 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    # Resource limits
+    cpus: 2
+    mem_limit: 4g
+    mem_reservation: 2g
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   # ─────────────────────────────────────────────────────────────────────────
   # Backend API + Execution Engine — soar-backend
@@ -70,6 +79,15 @@ services:
       soar-database:
         condition: service_healthy
     restart: unless-stopped
+    # Resource limits
+    cpus: 1
+    mem_limit: 1g
+    mem_reservation: 512m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   # ─────────────────────────────────────────────────────────────────────────
   # Frontend — soar-frontend
@@ -90,6 +108,15 @@ services:
       soar-backend:
         condition: service_healthy
     restart: unless-stopped
+    # Resource limits
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Networks & Volumes

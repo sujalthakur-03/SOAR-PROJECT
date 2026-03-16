@@ -49,6 +49,29 @@ import logger from '../utils/logger.js';
 const MAX_STEP_EXECUTIONS = 100;
 
 /**
+ * Per-step execution timeout in milliseconds.
+ * Configurable via STEP_TIMEOUT_MS environment variable.
+ * Default: 60 seconds.
+ */
+const STEP_TIMEOUT_MS = parseInt(process.env.STEP_TIMEOUT_MS || '60000');
+
+/**
+ * Wraps a promise with a timeout. Rejects if the promise does not resolve
+ * within the specified duration.
+ */
+async function withTimeout(promise, ms, stepId) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Step ${stepId} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Special step ID indicating execution should end
  */
 const STEP_END = '__END__';
@@ -288,8 +311,15 @@ export class ExecutionEngine {
           throw loopError;
         }
 
-        // Execute step and get next step instruction
-        const result = await this.executeStep(step, stepIndex);
+        // Execute step with timeout protection
+        const stepTimeout = step.timeout_seconds
+          ? step.timeout_seconds * 1000
+          : STEP_TIMEOUT_MS;
+        const result = await withTimeout(
+          this.executeStep(step, stepIndex),
+          stepTimeout,
+          step.step_id
+        );
 
         if (result.terminate) {
           // Execution ended (success or failure)

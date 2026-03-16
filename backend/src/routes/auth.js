@@ -8,11 +8,49 @@ import logger from '../utils/logger.js';
 
 const router = express.Router();
 
+// ── Login Rate Limiter ──────────────────────────────────────────────────────
+// Max 5 login attempts per IP per 15-minute window (in-memory store).
+const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const LOGIN_RATE_MAX = 5;
+const loginAttempts = new Map(); // ip -> { count, resetAt }
+
+function loginRateLimiter(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const record = loginAttempts.get(ip);
+
+  if (record && now < record.resetAt) {
+    if (record.count >= LOGIN_RATE_MAX) {
+      const retryAfterSec = Math.ceil((record.resetAt - now) / 1000);
+      res.set('Retry-After', String(retryAfterSec));
+      return res.status(429).json({
+        error: 'Too many login attempts. Please try again later.',
+        retry_after_seconds: retryAfterSec,
+      });
+    }
+    record.count++;
+  } else {
+    loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_RATE_WINDOW_MS });
+  }
+
+  next();
+}
+
+// Periodically clean up expired entries (every 5 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of loginAttempts) {
+    if (now >= record.resetAt) {
+      loginAttempts.delete(ip);
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
 /**
  * POST /auth/login
  * Authenticate user and return JWT token
  */
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 

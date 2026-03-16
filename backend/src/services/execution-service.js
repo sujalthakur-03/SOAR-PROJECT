@@ -223,6 +223,14 @@ export async function createExecution(playbookId, triggerData, triggerSource = '
   }
 }
 
+// Valid execution state transitions
+const VALID_STATE_TRANSITIONS = {
+  [ExecutionState.EXECUTING]: [ExecutionState.COMPLETED, ExecutionState.FAILED, ExecutionState.WAITING_APPROVAL],
+  [ExecutionState.WAITING_APPROVAL]: [ExecutionState.EXECUTING, ExecutionState.FAILED],
+  [ExecutionState.COMPLETED]: [],  // terminal state
+  [ExecutionState.FAILED]: []      // terminal state
+};
+
 /**
  * Update execution state (supports both execution_id and MongoDB _id)
  */
@@ -232,6 +240,18 @@ export async function updateExecutionState(id, state, error = null) {
 
     if (!execution) {
       throw new Error('Execution not found');
+    }
+
+    // Validate state transition
+    const allowedTransitions = VALID_STATE_TRANSITIONS[execution.state];
+    if (!allowedTransitions) {
+      throw new Error(`Unknown current state: ${execution.state}`);
+    }
+    if (!allowedTransitions.includes(state)) {
+      throw new Error(
+        `Invalid state transition: ${execution.state} → ${state}. ` +
+        `Allowed transitions from ${execution.state}: ${allowedTransitions.length > 0 ? allowedTransitions.join(', ') : '(none, terminal state)'}`
+      );
     }
 
     execution.state = state;

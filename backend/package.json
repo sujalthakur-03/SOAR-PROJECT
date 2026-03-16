@@ -9,7 +9,13 @@
     "dev": "node --watch src/index.js",
     "test": "echo \"Tests not yet implemented\" && exit 0"
   },
-  "keywords": ["soar", "security", "automation", "orchestration", "mongodb"],
+  "keywords": [
+    "soar",
+    "security",
+    "automation",
+    "orchestration",
+    "mongodb"
+  ],
   "author": "CyberSentinel",
   "license": "MIT",
   "dependencies": {
@@ -20,10 +26,12 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.4.1",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.0.0",
     "nodemailer": "^6.9.16",
     "uuid": "^11.0.3",
-    "winston": "^3.17.0"
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0"
   }
 }

@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
+import helmet from 'helmet';
 
 import logger from './utils/logger.js';
 import { connectToMongoDB, testConnection } from './utils/mongodb.js';
@@ -19,6 +20,7 @@ import authRoutes from './routes/auth.js';
 import socRoutes from './routes/soc-routes.js';
 import caseRoutes from './routes/case-routes.js';
 import { webhookSecurityMiddleware, securityRouter } from './middleware/webhook-security.js';
+import authMiddleware from './middleware/auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -36,12 +38,26 @@ const PORT = process.env.PORT || 3001;
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(helmet({
+  contentSecurityPolicy: false, // frontend handles CSP
+  crossOriginEmbedderPolicy: false,
+}));
+app.use(cors({
+  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000'],
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Routes
+
+// Public routes (no JWT required)
 app.use('/auth', authRoutes);
+
+// Apply JWT auth middleware to /api/* routes, except webhook ingestion
+app.use('/api', authMiddleware);
+
+// Protected API routes
 app.use('/api', apiRoutes);
 app.use('/api', caseRoutes);  // Case Management API (Agent 15)
 app.use('/api/security', securityRouter);  // Security observability endpoints
@@ -88,6 +104,14 @@ app.get('/status', async (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
+});
+
+/**
+ * Global error handler — must be registered after all routes
+ */
+app.use((err, req, res, next) => {
+  logger.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 /**

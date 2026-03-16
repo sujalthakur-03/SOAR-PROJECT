@@ -26,6 +26,7 @@ NC='\033[0m'
 GHCR_ORG="cybersentinel-06"
 DEPLOY_DIR="/opt/cybersentinel-soar"
 REPO_NAME="CyberSentinel-SOAR"
+DIGEST_BACKUP_FILE="${DEPLOY_DIR}/.soar-image-digests-backup"
 
 IMAGES=(
   "ghcr.io/${GHCR_ORG}/cybersentinel-soar-frontend:latest"
@@ -55,6 +56,50 @@ fail_exit() {
 # Get short image name from full GHCR path
 short_name() {
   echo "$1" | sed 's|ghcr.io/.*/||; s|:latest||'
+}
+
+# Save current image digests before pulling new ones
+save_digests() {
+  log_info "Saving current image digests to ${DIGEST_BACKUP_FILE}..."
+  : > "${DIGEST_BACKUP_FILE}"
+  for IMAGE in "${IMAGES[@]}"; do
+    DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null || echo "")
+    if [ -n "$DIGEST" ]; then
+      echo "${DIGEST}" >> "${DIGEST_BACKUP_FILE}"
+      log_ok "Saved: $(short_name "$IMAGE") → ${DIGEST##*@}"
+    else
+      log_warn "No local image found for $(short_name "$IMAGE") — skipping"
+    fi
+  done
+}
+
+# Rollback to previously saved image digests
+step_rollback() {
+  separator
+  log_info "Rolling back to previously saved image digests..."
+
+  if [ ! -f "${DIGEST_BACKUP_FILE}" ]; then
+    fail_exit "No digest backup found at ${DIGEST_BACKUP_FILE}. Cannot rollback."
+  fi
+
+  while IFS= read -r DIGEST_REF; do
+    [ -z "$DIGEST_REF" ] && continue
+    NAME=$(echo "$DIGEST_REF" | sed 's|ghcr.io/.*/||; s|@.*||')
+    log_info "Pulling ${BOLD}${NAME}${NC} by saved digest..."
+    docker pull "$DIGEST_REF" 2>&1 | tail -1
+
+    # Re-tag as :latest so docker-compose picks it up
+    BASE_IMAGE=$(echo "$DIGEST_REF" | cut -d@ -f1)
+    docker tag "$DIGEST_REF" "${BASE_IMAGE}:latest" 2>/dev/null || true
+    log_ok "Restored: ${NAME}"
+    IMAGES_UPDATED+=("$NAME")
+  done < "${DIGEST_BACKUP_FILE}"
+
+  if [ ${#IMAGES_UPDATED[@]} -eq 0 ]; then
+    fail_exit "No images were restored from backup"
+  fi
+
+  log_ok "All saved images pulled. Redeploying..."
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -145,6 +190,9 @@ step_preflight() {
 step_pull_images() {
   separator
   log_info "Step 3/5 — Pulling latest images from GHCR"
+
+  # Save current digests before pulling (for rollback)
+  save_digests
 
   for IMAGE in "${IMAGES[@]}"; do
     NAME=$(short_name "$IMAGE")
@@ -287,10 +335,19 @@ echo ""
 echo -e "${BOLD}  CyberSentinel SOAR v3.0 — Update Script${NC}"
 echo ""
 
-step_authenticate
-step_preflight
-step_pull_images
-step_redeploy
-step_verify
+if [ "${1:-}" = "--rollback" ]; then
+  log_warn "ROLLBACK MODE — restoring previous image versions"
+  step_authenticate
+  step_preflight
+  step_rollback
+  step_redeploy
+  step_verify
+else
+  step_authenticate
+  step_preflight
+  step_pull_images
+  step_redeploy
+  step_verify
+fi
 
 exit 0

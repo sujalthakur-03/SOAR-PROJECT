@@ -53,6 +53,12 @@ import {
   getAuditStats
 } from '../services/audit-service.js';
 import logger from '../utils/logger.js';
+import {
+  validatePagination,
+  validateSeverity,
+  validateExecutionState,
+  validateCaseStatus
+} from '../middleware/validate.js';
 
 // Import versioned playbook routes (Agent 9)
 import playbookRoutesV2 from './playbook-routes.js';
@@ -74,7 +80,7 @@ router.use('/v2', playbookRoutesV2);
  * GET /api/playbooks
  * Retrieve all playbooks with optional filters
  */
-router.get('/playbooks', async (req, res) => {
+router.get('/playbooks', validateSeverity, async (req, res) => {
   try {
     const { status, tags, severity } = req.query;
     const filters = {};
@@ -246,7 +252,7 @@ router.patch('/playbooks/:id/webhook/toggle', async (req, res) => {
  *   - sort_by: execution_id | event_time | created_at | started_at
  *   - sort_order: asc | desc
  */
-router.get('/executions', async (req, res) => {
+router.get('/executions', validatePagination, validateSeverity, validateExecutionState, async (req, res) => {
   try {
     const {
       playbook_id,
@@ -393,7 +399,7 @@ router.get('/stats/executions', async (req, res) => {
  * GET /api/approvals
  * Retrieve all approvals with filtering
  */
-router.get('/approvals', async (req, res) => {
+router.get('/approvals', validatePagination, async (req, res) => {
   try {
     const { status, execution_id, playbook_id, limit, offset } = req.query;
     const filters = {};
@@ -591,7 +597,7 @@ router.post('/connectors/:id/test', async (req, res) => {
  * GET /api/audit
  * Retrieve audit logs with filtering
  */
-router.get('/audit', async (req, res) => {
+router.get('/audit', validatePagination, async (req, res) => {
   try {
     const {
       actor_email,

@@ -117,15 +117,30 @@ class APIClient {
   ): Promise<T> {
     const url = this.getFullUrl(endpoint);
 
+    const token = typeof window !== 'undefined' ? localStorage.getItem('cybersentinel_auth_token') : null;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...options?.headers as Record<string, string>,
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers,
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/auth') {
+          localStorage.removeItem('cybersentinel_auth_token');
+          localStorage.removeItem('cybersentinel_auth_user');
+          window.location.href = '/auth';
+        }
+        throw new Error('Session expired. Please log in again.');
+      }
+
       const error = await response.json().catch(() => ({}));
 
       // Enhanced error handling for validation errors

@@ -134,26 +134,34 @@ export async function updatePlaybook(id, updates, userId) {
       throw new Error('Playbook not found');
     }
 
-    // Update fields
-    if (updates.name) playbook.name = updates.name;
-    if (updates.description !== undefined) playbook.description = updates.description;
-    if (updates.tags) playbook.tags = updates.tags;
-    if (updates.severity) playbook.severity = updates.severity;
-    if (updates.status) playbook.status = updates.status;
-    if (updates.steps) playbook.steps = updates.steps;
-    if (updates.matching_rules !== undefined) playbook.matching_rules = updates.matching_rules;
-    if (updates.expected_schema !== undefined) playbook.expected_schema = updates.expected_schema;
+    // Build atomic $set and $inc operations to avoid race conditions
+    const $set = { updated_by: userId || 'system' };
+    if (updates.name) $set.name = updates.name;
+    if (updates.description !== undefined) $set.description = updates.description;
+    if (updates.tags) $set.tags = updates.tags;
+    if (updates.severity) $set.severity = updates.severity;
+    if (updates.status) $set.status = updates.status;
+    if (updates.steps) $set.steps = updates.steps;
+    if (updates.matching_rules !== undefined) $set.matching_rules = updates.matching_rules;
+    if (updates.expected_schema !== undefined) $set.expected_schema = updates.expected_schema;
 
-    playbook.updated_by = userId || 'system';
-    playbook.version += 1;
+    // Determine which model to use for the atomic update
+    const Model = playbook.constructor;
+    const updated = await Model.findOneAndUpdate(
+      { _id: playbook._id },
+      { $set, $inc: { version: 1 } },
+      { new: true }
+    );
 
-    await playbook.save();
+    if (!updated) {
+      throw new Error('Playbook was deleted during update');
+    }
 
-    logger.info(`Playbook updated: ${playbook.playbook_id} (${playbook.name})`);
+    logger.info(`Playbook updated: ${updated.playbook_id} (${updated.name})`);
 
     return {
-      ...playbook.toObject(),
-      id: playbook._id.toString()
+      ...updated.toObject(),
+      id: updated._id.toString()
     };
   } catch (error) {
     logger.error(`Failed to update playbook ${id}:`, error);

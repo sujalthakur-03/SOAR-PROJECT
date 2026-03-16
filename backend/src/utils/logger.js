@@ -1,6 +1,26 @@
 import winston from 'winston';
+import DailyRotateFile from 'winston-daily-rotate-file';
 
 const logLevel = process.env.LOG_LEVEL || 'info';
+
+// Daily rotating file transport for error logs
+const errorRotateTransport = new DailyRotateFile({
+  filename: 'logs/error-%DATE%.log',
+  datePattern: 'YYYY-MM-DD',
+  level: 'error',
+  maxSize: '50m',
+  maxFiles: '30d',
+  zippedArchive: true,
+});
+
+// Daily rotating file transport for combined logs
+const combinedRotateTransport = new DailyRotateFile({
+  filename: 'logs/combined-%DATE%.log',
+  datePattern: 'YYYY-MM-DD',
+  maxSize: '50m',
+  maxFiles: '30d',
+  zippedArchive: true,
+});
 
 const logger = winston.createLogger({
   level: logLevel,
@@ -12,8 +32,8 @@ const logger = winston.createLogger({
   ),
   defaultMeta: { service: 'cybersentinel-backend' },
   transports: [
-    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'logs/combined.log' }),
+    errorRotateTransport,
+    combinedRotateTransport,
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
