@@ -237,8 +237,8 @@ export async function getWebhookInfo(id, baseUrl) {
       };
     }
 
-    // V2 model: webhook is in separate Webhook collection
-    const webhook = await Webhook.findByPlaybookId(playbookId);
+    // V2 model: webhook is in separate Webhook collection (include secret for full URL)
+    const webhook = await Webhook.findOne({ playbook_id: playbookId }).select('+secret');
     if (!webhook) {
       return {
         playbook_id: playbookId,
@@ -256,7 +256,7 @@ export async function getWebhookInfo(id, baseUrl) {
       playbook_name: playbook.name,
       webhook_id: webhook.webhook_id,
       webhook_enabled: webhook.enabled,
-      webhook_url: `${baseUrl}/api/webhooks/${webhook.webhook_id}`,
+      webhook_url: `${baseUrl}/api/webhooks/${webhook.webhook_id}/${webhook.secret}`,
       secret_last_rotated: webhook.secret_rotated_at,
       created_at: webhook.created_at
     };

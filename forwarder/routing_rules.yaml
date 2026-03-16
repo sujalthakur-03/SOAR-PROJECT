@@ -14,8 +14,8 @@
 #       <field>:                  # Field path (supports dot notation)
 #         - <value1>              # List of acceptable values (OR logic)
 #         - <value2>
-#     match_any:                  # Alternative: ANY condition matches (OR logic)
-#       - <field>: <values>
+#     match_any:                  # Alternative: ANY condition block matches (OR logic)
+#       - <field>: <values>       # Each block is AND-ed internally, blocks are OR-ed
 #     forward_to:                 # Target webhook(s)
 #       - webhook_url: <url>      # Full webhook URL with secret
 #         headers: {}             # Optional additional headers

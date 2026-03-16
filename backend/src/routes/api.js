@@ -178,6 +178,15 @@ router.get('/playbooks/:id/webhook', async (req, res) => {
   try {
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     const webhookInfo = await getWebhookInfo(req.params.id, baseUrl);
+
+    // Return 404 when no webhook is active (so frontend shows "Activate" button)
+    if (!webhookInfo || !webhookInfo.webhook_enabled || !webhookInfo.webhook_url) {
+      return res.status(404).json({
+        error: 'Webhook not found',
+        message: 'No webhook configured for this playbook.'
+      });
+    }
+
     res.json(webhookInfo);
   } catch (error) {
     logger.error('Error getting webhook info:', error);

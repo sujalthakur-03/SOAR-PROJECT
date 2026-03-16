@@ -1294,17 +1294,17 @@ function TriggerConfig({
                   )}
                 </div>
               </div>
-              {webhookData.url && (
+              {webhookData.webhook_url && (
                 <div className="flex items-center gap-2">
                   <code className="flex-1 text-[10px] bg-background px-2 py-1.5 rounded border font-mono break-all leading-relaxed">
-                    {webhookData.url}
+                    {webhookData.webhook_url}
                   </code>
                   <Button
                     variant="outline"
                     size="icon"
                     className="h-8 w-8 shrink-0"
                     onClick={() => {
-                      copyToClipboard(webhookData.url).then(
+                      copyToClipboard(webhookData.webhook_url).then(
                         () => toast({ title: 'Webhook URL copied' }),
                         () => toast({ title: 'Failed to copy', variant: 'destructive' })
                       );
