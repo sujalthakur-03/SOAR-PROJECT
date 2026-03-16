@@ -162,14 +162,47 @@ step_preflight() {
   fi
 
   if [ ! -f "${DEPLOY_DIR}/docker-compose.yml" ]; then
-    log_warn "docker-compose.yml missing — pulling from repo..."
+    log_warn "docker-compose.yml missing — fetching from repo (sparse checkout)..."
     command -v git &>/dev/null || fail_exit "Git not installed (needed to fetch docker-compose.yml)"
     REPO_URL="https://${GHCR_TOKEN}@github.com/${GHCR_ORG}/${REPO_NAME}.git"
-    git clone --depth 1 "${REPO_URL}" /tmp/cs-update 2>/dev/null || fail_exit "Failed to clone repo"
-    cp /tmp/cs-update/docker-compose.yml "${DEPLOY_DIR}/"
-    cp /tmp/cs-update/cybersentinel-update-soar.sh "${DEPLOY_DIR}/" 2>/dev/null || true
-    cp /tmp/cs-update/cybersentinel-deploy-soar.sh "${DEPLOY_DIR}/" 2>/dev/null || true
-    rm -rf /tmp/cs-update
+
+    TEMP_DIR=$(mktemp -d)
+    cd "${TEMP_DIR}"
+    git init -q
+    git remote add origin "${REPO_URL}"
+    git config core.sparseCheckout true
+    mkdir -p .git/info
+    cat > .git/info/sparse-checkout << 'SPARSE'
+docker-compose.yml
+forwarder/
+cybersentinel-update-soar.sh
+cybersentinel-deploy-soar.sh
+SPARSE
+    git pull --depth 1 origin main -q 2>/dev/null || fail_exit "Failed to fetch from repo"
+
+    cp docker-compose.yml "${DEPLOY_DIR}/"
+    cp cybersentinel-update-soar.sh "${DEPLOY_DIR}/" 2>/dev/null || true
+    cp cybersentinel-deploy-soar.sh "${DEPLOY_DIR}/" 2>/dev/null || true
+
+    # Update forwarder directory (preserve user config)
+    if [ -d "forwarder" ]; then
+      mkdir -p "${DEPLOY_DIR}/forwarder"
+      for file in forwarder/*; do
+        BASENAME=$(basename "$file")
+        TARGET="${DEPLOY_DIR}/forwarder/${BASENAME}"
+        if [ "$BASENAME" = "routing_rules.yaml" ] && [ -f "$TARGET" ]; then
+          continue  # Don't overwrite user's routing rules
+        elif [ "$BASENAME" = ".env" ] && [ -f "$TARGET" ]; then
+          continue  # Don't overwrite user's forwarder env
+        else
+          cp "$file" "$TARGET"
+        fi
+      done
+      log_ok "Forwarder files updated"
+    fi
+
+    cd "${DEPLOY_DIR}"
+    rm -rf "${TEMP_DIR}"
     log_ok "docker-compose.yml fetched"
   fi
 

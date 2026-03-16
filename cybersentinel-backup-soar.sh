@@ -30,7 +30,7 @@ info "Backup directory: ${BACKUP_DIR}"
 
 # Run mongodump inside container, copy out
 info "Running mongodump..."
-docker exec "${CONTAINER_NAME}" mongodump --db soar --out /tmp/backup_${TIMESTAMP} --quiet || fail "mongodump failed"
+docker exec "${CONTAINER_NAME}" mongodump --db cybersentinel --out /tmp/backup_${TIMESTAMP} --quiet || fail "mongodump failed"
 
 # Copy from container to host
 docker cp "${CONTAINER_NAME}:/tmp/backup_${TIMESTAMP}" "${BACKUP_DIR}/dump" || fail "Failed to copy backup from container"

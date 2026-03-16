@@ -190,11 +190,11 @@ NODE_ENV=production
 MONGODB_URI=mongodb://soar-database:27017
 MONGODB_DB_NAME=cybersentinel
 
-# ── CyberSentinel Control Plane (Wazuh 4.x API) ──
+# ── CyberSentinel Control Plane API ──
 # Used for active response actions (block IP, manage CDB lists, etc.)
-CYBERSENTINEL_CONTROL_PLANE_URL=https://your-wazuh-server:55000
-CYBERSENTINEL_CONTROL_PLANE_USER=wazuh
-CYBERSENTINEL_CONTROL_PLANE_PASSWORD=changeme
+CYBERSENTINEL_CONTROL_PLANE_URL=
+CYBERSENTINEL_CONTROL_PLANE_USER=
+CYBERSENTINEL_CONTROL_PLANE_PASSWORD=
 
 # ── VirusTotal API (threat enrichment) ──
 VIRUSTOTAL_API_KEY=
@@ -224,7 +224,7 @@ FIREWALL_API_KEY=
 WEBHOOK_TRUSTED_IPS=127.0.0.1,::1,::ffff:127.0.0.1
 
 # ── CORS ──
-CORS_ORIGIN=*
+CORS_ORIGIN=http://localhost:3000
 
 # ── Legacy (disabled) ──
 ENABLE_ALERT_STORAGE=false
@@ -319,20 +319,88 @@ step_setup_deploy_dir() {
 
   mkdir -p "${DEPLOY_DIR}"
 
-  # Clone or update the repo to get docker-compose.yml and config files
-  if [ -f "${DEPLOY_DIR}/docker-compose.yml" ]; then
-    log_ok "docker-compose.yml already exists in ${DEPLOY_DIR}"
-  else
-    log_info "Cloning CyberSentinel SOAR repo to ${DEPLOY_DIR}..."
-    # Use token for private repo access
-    git clone --depth 1 "https://${GHCR_TOKEN}@github.com/${GHCR_ORG}/CyberSentinel-SOAR.git" "${DEPLOY_DIR}.tmp" 2>/dev/null || \
-      fail_exit "Failed to clone repo. Check token permissions."
+  REPO_NAME="CyberSentinel-SOAR"
+  REPO_URL="https://${GHCR_TOKEN}@github.com/${GHCR_ORG}/${REPO_NAME}.git"
+  NEED_FETCH=false
 
-    # Move files into deploy dir (may already have backend/.env)
-    cp -rn "${DEPLOY_DIR}.tmp/"* "${DEPLOY_DIR}/" 2>/dev/null || true
-    cp -rn "${DEPLOY_DIR}.tmp/".* "${DEPLOY_DIR}/" 2>/dev/null || true
-    rm -rf "${DEPLOY_DIR}.tmp"
-    log_ok "Repo cloned to ${DEPLOY_DIR}"
+  # Check what we need to fetch
+  [ ! -f "${DEPLOY_DIR}/docker-compose.yml" ] && NEED_FETCH=true
+  [ ! -d "${DEPLOY_DIR}/forwarder" ] && NEED_FETCH=true
+
+  if [ "$NEED_FETCH" = false ]; then
+    log_ok "docker-compose.yml already exists in ${DEPLOY_DIR}"
+    log_ok "forwarder/ directory already exists in ${DEPLOY_DIR}"
+  else
+    log_info "Fetching docker-compose.yml and forwarder/ from repo (sparse checkout)..."
+
+    TEMP_DIR=$(mktemp -d)
+    trap "rm -rf ${TEMP_DIR}" EXIT
+
+    # Initialize a bare sparse checkout — only pulls docker-compose.yml + forwarder/
+    cd "${TEMP_DIR}"
+    git init -q
+    git remote add origin "${REPO_URL}"
+    git config core.sparseCheckout true
+
+    # Only checkout these paths
+    mkdir -p .git/info
+    cat > .git/info/sparse-checkout << 'SPARSE'
+docker-compose.yml
+forwarder/
+SPARSE
+
+    git pull --depth 1 origin main -q 2>/dev/null || \
+      fail_exit "Failed to fetch from repo. Check token permissions."
+
+    # Copy docker-compose.yml (don't overwrite if it exists)
+    if [ ! -f "${DEPLOY_DIR}/docker-compose.yml" ] && [ -f "docker-compose.yml" ]; then
+      cp docker-compose.yml "${DEPLOY_DIR}/"
+      log_ok "Fetched docker-compose.yml"
+    else
+      log_ok "docker-compose.yml already present — skipped"
+    fi
+
+    # Copy forwarder directory (don't overwrite existing routing_rules.yaml)
+    if [ -d "forwarder" ]; then
+      mkdir -p "${DEPLOY_DIR}/forwarder"
+
+      # Copy all forwarder files, preserving user-modified routing_rules.yaml
+      for file in forwarder/*; do
+        BASENAME=$(basename "$file")
+        TARGET="${DEPLOY_DIR}/forwarder/${BASENAME}"
+
+        if [ "$BASENAME" = "routing_rules.yaml" ] && [ -f "$TARGET" ]; then
+          log_info "Preserving existing routing_rules.yaml (not overwritten)"
+        elif [ "$BASENAME" = ".env" ] && [ -f "$TARGET" ]; then
+          log_info "Preserving existing forwarder/.env (not overwritten)"
+        else
+          cp "$file" "$TARGET"
+        fi
+      done
+
+      # Ensure .env.example is always copied as reference
+      [ -f "forwarder/.env.example" ] && cp "forwarder/.env.example" "${DEPLOY_DIR}/forwarder/.env.example"
+
+      log_ok "Fetched forwarder/ directory"
+    fi
+
+    # Cleanup
+    cd "${DEPLOY_DIR}"
+    rm -rf "${TEMP_DIR}"
+    trap - EXIT
+  fi
+
+  # Show what's in the deploy directory
+  log_info "Deploy directory contents:"
+  echo "    ${DEPLOY_DIR}/"
+  echo "    ├── docker-compose.yml"
+  echo "    ├── backend/"
+  echo "    │   └── .env"
+  echo "    └── forwarder/"
+  if [ -d "${DEPLOY_DIR}/forwarder" ]; then
+    for f in "${DEPLOY_DIR}/forwarder/"*; do
+      [ -f "$f" ] && echo "        ├── $(basename "$f")"
+    done
   fi
 }
 

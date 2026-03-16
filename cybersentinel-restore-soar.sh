@@ -39,7 +39,7 @@ docker cp "${DUMP_DIR}" "${CONTAINER_NAME}:/tmp/restore_${TIMESTAMP}"
 
 # Run mongorestore
 info "Running mongorestore..."
-docker exec "${CONTAINER_NAME}" mongorestore --db soar --drop "/tmp/restore_${TIMESTAMP}/soar" --quiet || fail "mongorestore failed"
+docker exec "${CONTAINER_NAME}" mongorestore --db cybersentinel --drop "/tmp/restore_${TIMESTAMP}/cybersentinel" --quiet || fail "mongorestore failed"
 
 # Cleanup
 docker exec "${CONTAINER_NAME}" rm -rf "/tmp/restore_${TIMESTAMP}"
