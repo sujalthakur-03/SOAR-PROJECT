@@ -36,6 +36,7 @@ import SLAPolicy from '../models/sla-policy.js';
 import SOCHealthAlert, { AlertStatus } from '../models/soc-health-alert.js';
 import Execution from '../models/execution.js';
 import logger from '../utils/logger.js';
+import { requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -325,7 +326,7 @@ router.get('/sla/policies', async (req, res) => {
  * POST /api/soc/sla/policies
  * Create a new SLA policy
  */
-router.post('/sla/policies', async (req, res) => {
+router.post('/sla/policies', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const userId = req.user?.email || 'system';
     const { name, description, scope, playbook_id, severity, thresholds } = req.body;
@@ -581,7 +582,7 @@ router.get('/health/alerts', async (req, res) => {
  * POST /api/soc/health/alerts/:id/acknowledge
  * Acknowledge a SOC health alert
  */
-router.post('/health/alerts/:id/acknowledge', async (req, res) => {
+router.post('/health/alerts/:id/acknowledge', requireRole('admin', 'senior_analyst', 'analyst'), async (req, res) => {
   try {
     const userId = req.user?.email || 'analyst';
     const note = req.body.note || '';
@@ -611,7 +612,7 @@ router.post('/health/alerts/:id/acknowledge', async (req, res) => {
  * POST /api/soc/health/alerts/:id/resolve
  * Resolve a SOC health alert
  */
-router.post('/health/alerts/:id/resolve', async (req, res) => {
+router.post('/health/alerts/:id/resolve', requireRole('admin', 'senior_analyst', 'analyst'), async (req, res) => {
   try {
     const userId = req.user?.email || 'analyst';
     const note = req.body.note || '';

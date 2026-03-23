@@ -101,7 +101,7 @@ services:
         VITE_BACKEND_PORT: "${BACKEND_PORT:-3001}"
     container_name: soar-frontend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_PORT:-3022}:3000"
     networks:
       - soar-network
     depends_on:

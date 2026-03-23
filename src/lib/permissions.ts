@@ -67,6 +67,13 @@ export const FEATURE_PERMISSIONS: Record<string, FeaturePermission> = {
     edit: ['admin'],
     delete: ['admin'],
   },
+
+  // Alias for userManagement — view key used by Index.tsx view switcher
+  users: {
+    view: ['admin'],
+    edit: ['admin'],
+    delete: ['admin'],
+  },
 };
 
 export const canViewFeature = (feature: string, role: AppRole | null): boolean => {

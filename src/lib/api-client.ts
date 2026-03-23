@@ -111,6 +111,50 @@ class APIClient {
     return `${getBackendBaseUrl()}${API_BASE_URL}${endpoint}`;
   }
 
+  /**
+   * Build a URL that is NOT under /api — used for /auth/* endpoints.
+   */
+  private getRootUrl(path: string): string {
+    return `${getBackendBaseUrl()}${path}`;
+  }
+
+  /**
+   * Make a request to a non-/api endpoint (e.g. /auth/register).
+   * Shares the same auth-header and error-handling logic as request().
+   */
+  private async requestRoot<T>(
+    path: string,
+    options?: RequestInit
+  ): Promise<T> {
+    const url = this.getRootUrl(path);
+
+    const token = typeof window !== 'undefined' ? localStorage.getItem('cybersentinel_auth_token') : null;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...options?.headers as Record<string, string>,
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(url, { ...options, headers });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/auth') {
+          localStorage.removeItem('cybersentinel_auth_token');
+          localStorage.removeItem('cybersentinel_auth_user');
+          window.location.href = '/auth';
+        }
+        throw new Error('Session expired. Please log in again.');
+      }
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
   private async request<T>(
     endpoint: string,
     options?: RequestInit
@@ -118,6 +162,21 @@ class APIClient {
     const url = this.getFullUrl(endpoint);
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('cybersentinel_auth_token') : null;
+
+    // Pre-flight token expiry check — redirect to login if expired
+    if (token && typeof window !== 'undefined' && window.location.pathname !== '/auth') {
+      const { isTokenExpired, isTokenExpiringSoon } = await import('@/lib/token-utils');
+      if (isTokenExpired(token)) {
+        localStorage.removeItem('cybersentinel_auth_token');
+        localStorage.removeItem('cybersentinel_auth_user');
+        window.location.href = '/auth';
+        throw new Error('Session expired. Please log in again.');
+      }
+      if (isTokenExpiringSoon(token)) {
+        console.warn('[APIClient] JWT token expires within 5 minutes');
+      }
+    }
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...options?.headers as Record<string, string>,
@@ -277,6 +336,34 @@ class APIClient {
   async deletePlaybook(id: string) {
     return this.request<any>(`/v2/playbooks/${id}`, {
       method: 'DELETE',
+    });
+  }
+
+  async exportPlaybook(id: string): Promise<Blob> {
+    const url = `${getBackendBaseUrl()}${API_BASE_URL}/v2/playbooks/${id}/export`;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('cybersentinel_auth_token') : null;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Failed to export playbook: HTTP ${response.status}`);
+    }
+    return response.blob();
+  }
+
+  async importPlaybook(data: any) {
+    return this.request<any>('/v2/playbooks/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async clonePlaybook(id: string) {
+    return this.request<any>(`/v2/playbooks/${id}/clone`, {
+      method: 'POST',
     });
   }
 
@@ -725,6 +812,90 @@ class APIClient {
     if (status) searchParams.append('status', status);
     const query = searchParams.toString();
     return this.request<any[]>(`/cases/assigned/${analyst}${query ? `?${query}` : ''}`);
+  }
+
+  // ============================================================================
+  // GLOBAL SEARCH
+  // ============================================================================
+
+  async globalSearch(query: string) {
+    const encoded = encodeURIComponent(query);
+    return this.request<{
+      executions: Array<{
+        execution_id: string;
+        playbook_name: string;
+        state: string;
+        trigger_data?: { rule?: { description?: string }; severity?: string };
+        created_at: string;
+      }>;
+      playbooks: Array<{
+        playbook_id: string;
+        name: string;
+        description?: string;
+        version: number;
+        enabled: boolean;
+        created_at: string;
+      }>;
+      cases: Array<{
+        case_id: string;
+        title: string;
+        description?: string;
+        severity: string;
+        status: string;
+        created_at: string;
+      }>;
+    }>(`/search?q=${encoded}`);
+  }
+
+  // ============================================================================
+  // USER MANAGEMENT (Admin only)
+  // ============================================================================
+
+  async getUsers() {
+    return this.request<any[]>('/users');
+  }
+
+  async getUser(id: string) {
+    return this.request<any>(`/users/${id}`);
+  }
+
+  async createUser(data: {
+    username: string;
+    password: string;
+    email: string;
+    fullName: string;
+    role: string;
+  }) {
+    // POST /auth/register is outside the /api prefix
+    return this.requestRoot<any>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateUser(id: string, data: {
+    fullName?: string;
+    email?: string;
+    role?: string;
+    status?: string;
+  }) {
+    return this.request<any>(`/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deactivateUser(id: string) {
+    return this.request<any>(`/users/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async resetUserPassword(id: string, newPassword: string) {
+    return this.request<any>(`/users/${id}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ newPassword }),
+    });
   }
 }
 

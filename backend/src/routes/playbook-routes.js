@@ -33,6 +33,7 @@
  */
 
 import express from 'express';
+import crypto from 'crypto';
 import {
   getPlaybooks,
   getPlaybook,
@@ -400,6 +401,190 @@ router.delete('/playbooks/:playbook_id', async (req, res) => {
       ...result,
       message: 'Playbook deleted successfully'
     });
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GET /api/v2/playbooks/:playbook_id/export - Export playbook as JSON
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Export playbook as a downloadable JSON file
+ *
+ * Path params:
+ * - playbook_id: Playbook ID (e.g., "PB-SSH-001")
+ *
+ * Response: 200 OK (application/json file download)
+ * {
+ *   "name": "SSH Brute Force Response",
+ *   "description": "...",
+ *   "dsl": { ... },
+ *   "tags": [...],
+ *   "severity": "high",
+ *   "enabled": true,
+ *   "metadata": {
+ *     "exported_at": "2026-03-23T...",
+ *     "exported_from": "CyberSentinel SOAR",
+ *     "version": 3,
+ *     "source_playbook_id": "PB-SSH-001"
+ *   }
+ * }
+ */
+router.get('/playbooks/:playbook_id/export', async (req, res) => {
+  try {
+    const { playbook_id } = req.params;
+    const playbook = await getPlaybook(playbook_id);
+
+    if (!playbook) {
+      return res.status(404).json({
+        code: 'PLAYBOOK_NOT_FOUND',
+        message: `Playbook ${playbook_id} not found`,
+        details: { playbook_id }
+      });
+    }
+
+    const exportData = {
+      name: playbook.name,
+      description: playbook.description || '',
+      dsl: playbook.dsl,
+      tags: playbook.dsl?.tags || [],
+      severity: playbook.dsl?.severity || 'medium',
+      enabled: playbook.enabled,
+      metadata: {
+        exported_at: new Date().toISOString(),
+        exported_from: 'CyberSentinel SOAR',
+        version: playbook.version,
+        source_playbook_id: playbook.playbook_id
+      }
+    };
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="playbook-${playbook_id}.json"`);
+
+    logger.info(`[PlaybookRoutes] Exported playbook ${playbook_id}`);
+
+    res.json(exportData);
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/v2/playbooks/import - Import playbook from JSON
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Import a playbook from an exported JSON file
+ *
+ * Request body: exported playbook JSON
+ *
+ * Response: 201 Created
+ * The newly created playbook (version 1, enabled=false)
+ *
+ * Errors:
+ * - 400: Invalid import data or DSL validation failed
+ */
+router.post('/playbooks/import', async (req, res) => {
+  try {
+    const userId = req.user?.email || req.body.created_by || 'system';
+    const importData = req.body;
+
+    // Validate import data has required fields
+    if (!importData.name) {
+      return res.status(400).json({
+        code: 'INVALID_IMPORT',
+        message: 'Import data must include a playbook name',
+        details: {}
+      });
+    }
+
+    if (!importData.dsl || !importData.dsl.steps || importData.dsl.steps.length === 0) {
+      return res.status(400).json({
+        code: 'INVALID_IMPORT',
+        message: 'Import data must include a DSL with at least one step',
+        details: {}
+      });
+    }
+
+    // Generate a new unique playbook_id for the import
+    const importId = `PB-AUTO-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    // Create playbook using the service (validates DSL, generates new ID)
+    const playbook = await createPlaybook({
+      playbook_id: importId,
+      name: importData.name,
+      description: importData.description || '',
+      dsl: importData.dsl,
+    }, userId);
+
+    // Disable the imported playbook so it doesn't auto-run
+    await togglePlaybook(playbook.playbook_id, false);
+
+    // Re-fetch to return the disabled version
+    const disabledPlaybook = await getPlaybook(playbook.playbook_id, playbook.version);
+
+    logger.info(`[PlaybookRoutes] Imported playbook as ${playbook.playbook_id} by ${userId}`);
+
+    res.status(201).json(disabledPlaybook || { ...playbook, enabled: false });
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/v2/playbooks/:playbook_id/clone - Clone playbook
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Clone a playbook as a new playbook
+ *
+ * Path params:
+ * - playbook_id: Source playbook ID
+ *
+ * Response: 201 Created
+ * The newly created playbook (version 1, enabled=false)
+ *
+ * Errors:
+ * - 404: Source playbook not found
+ */
+router.post('/playbooks/:playbook_id/clone', async (req, res) => {
+  try {
+    const { playbook_id } = req.params;
+    const userId = req.user?.email || 'system';
+
+    // Get the active version of the source playbook
+    const source = await getPlaybook(playbook_id);
+
+    if (!source) {
+      return res.status(404).json({
+        code: 'PLAYBOOK_NOT_FOUND',
+        message: `Playbook ${playbook_id} not found`,
+        details: { playbook_id }
+      });
+    }
+
+    // Generate a new unique playbook_id for the clone
+    const cloneId = `PB-AUTO-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    // Create a new playbook with copied data
+    const cloned = await createPlaybook({
+      playbook_id: cloneId,
+      name: `Copy of ${source.name}`,
+      description: source.description || '',
+      dsl: source.dsl,
+    }, userId);
+
+    // Disable the cloned playbook so it doesn't auto-run
+    await togglePlaybook(cloned.playbook_id, false);
+
+    // Re-fetch to return the disabled version
+    const disabledClone = await getPlaybook(cloned.playbook_id, cloned.version);
+
+    logger.info(`[PlaybookRoutes] Cloned playbook ${playbook_id} as ${cloned.playbook_id} by ${userId}`);
+
+    res.status(201).json(disabledClone || { ...cloned, enabled: false });
   } catch (error) {
     handleError(error, req, res);
   }

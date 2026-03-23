@@ -14,7 +14,7 @@
  */
 
 import mongoose from 'mongoose';
-import { Execution, Playbook } from '../models/index.js';
+import { Execution, Playbook, PlaybookVersioned } from '../models/index.js';
 import { ExecutionState, StepState } from '../models/execution.js';
 import logger from '../utils/logger.js';
 
@@ -186,12 +186,36 @@ export async function getExecution(id) {
  */
 export async function createExecution(playbookId, triggerData, triggerSource = 'manual') {
   try {
-    // Find playbook by playbook_id (logical ID)
-    const playbook = await Playbook.findOne({ playbook_id: playbookId });
+    // Find playbook by playbook_id — check PlaybookVersioned (v2) first, fall back to legacy
+    let playbook = await PlaybookVersioned.findOne({ playbook_id: playbookId, enabled: true });
+    let steps;
+
+    if (playbook) {
+      // V2: steps are inside the DSL object
+      steps = (playbook.dsl?.steps || []).map(step => ({
+        step_id: step.step_id,
+        state: StepState.PENDING
+      }));
+    } else {
+      // Fallback to legacy Playbook model
+      playbook = await Playbook.findOne({ playbook_id: playbookId });
+      if (playbook) {
+        steps = (playbook.steps || []).map(step => ({
+          step_id: step.step_id,
+          state: StepState.PENDING
+        }));
+      }
+    }
 
     if (!playbook) {
-      throw new Error('Playbook not found');
+      throw new Error(`Playbook not found: ${playbookId}`);
     }
+
+    // For manual/simulation executions, provide defaults for fields
+    // that are normally populated by webhook ingestion
+    const now = new Date();
+    const crypto = await import('crypto');
+    const fingerprint = crypto.randomBytes(16).toString('hex');
 
     // ALL context is in trigger_data - no alert fields in execution root
     const execution = new Execution({
@@ -200,11 +224,20 @@ export async function createExecution(playbookId, triggerData, triggerSource = '
       state: ExecutionState.EXECUTING,
       trigger_data: triggerData,
       trigger_source: triggerSource, // 'webhook', 'manual', 'simulation', 'api'
-      started_at: new Date(),
-      steps: playbook.steps.map(step => ({
-        step_id: step.step_id,
-        state: StepState.PENDING
-      }))
+      started_at: now,
+      steps,
+      // Required fields — defaults for non-webhook sources
+      webhook_id: `SIM-${playbook.playbook_id}`,
+      fingerprint,
+      event_time: triggerData?.timestamp ? new Date(triggerData.timestamp) : now,
+      event_time_source: triggerData?.timestamp ? 'payload.timestamp' : 'arrival_time',
+      trigger_snapshot: {
+        trigger_id: `TRG-SIM-${playbook.playbook_id}`,
+        version: 1,
+        conditions: [],
+        match: 'ALL',
+        snapshot_at: now,
+      },
     });
 
     await execution.save();
@@ -214,7 +247,6 @@ export async function createExecution(playbookId, triggerData, triggerSource = '
     return {
       ...execution.toObject(),
       id: execution._id.toString(),
-      // Use the actual execution_id field (human-readable), NOT _id
       execution_id: execution.execution_id
     };
   } catch (error) {

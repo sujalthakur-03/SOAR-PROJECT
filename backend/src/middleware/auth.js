@@ -10,6 +10,22 @@
 import { verifyToken } from '../services/auth-service.js';
 import logger from '../utils/logger.js';
 
+/**
+ * RBAC middleware factory.
+ * Returns middleware that checks whether the authenticated user has one of
+ * the required roles.  Must be used AFTER authMiddleware (req.user must exist).
+ *
+ * Usage:  router.post('/admin-only', requireRole('admin'), handler);
+ */
+export function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions', required_roles: roles });
+    }
+    next();
+  };
+}
+
 // Paths that match webhook ingestion: /webhooks/<id>/<secret>
 // These use URL-based secret auth instead of JWT.
 const WEBHOOK_INGESTION_PATTERN = /^\/webhooks\/[^/]+\/[^/]+$/;

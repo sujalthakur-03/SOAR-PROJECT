@@ -27,6 +27,7 @@ import {
   getAssignedCases
 } from '../services/case-service.js';
 import logger from '../utils/logger.js';
+import { requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -191,7 +192,7 @@ router.post('/cases/from-execution/:execution_id', async (req, res) => {
  *   - tags: string[]
  *   - resolution_summary: string
  */
-router.put('/cases/:id', async (req, res) => {
+router.put('/cases/:id', requireRole('admin', 'engineer', 'senior_analyst'), async (req, res) => {
   try {
     const userId = req.user?.email || 'analyst';
     const caseDoc = await updateCase(req.params.id, req.body, userId);
@@ -276,7 +277,7 @@ router.post('/cases/:id/link-execution/:execution_id', async (req, res) => {
  * DELETE /api/cases/:id/unlink-execution/:execution_id
  * Unlink an execution from a case
  */
-router.delete('/cases/:id/unlink-execution/:execution_id', async (req, res) => {
+router.delete('/cases/:id/unlink-execution/:execution_id', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const userId = req.user?.email || 'analyst';
     const caseDoc = await unlinkExecutionFromCase(

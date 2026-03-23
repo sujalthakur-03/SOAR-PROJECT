@@ -4,6 +4,8 @@
 
 import express from 'express';
 import { authenticateUser, verifyToken, getUserById, createUser } from '../services/auth-service.js';
+import authMiddleware from '../middleware/auth.js';
+import { requireRole } from '../middleware/auth.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
@@ -108,7 +110,7 @@ router.post('/verify', (req, res) => {
  * GET /auth/me
  * Get current user data from token
  */
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -123,7 +125,7 @@ router.get('/me', (req, res) => {
       return res.status(401).json({ error: result.error });
     }
 
-    const user = getUserById(result.user.userId);
+    const user = await getUserById(result.user.userId);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -150,21 +152,8 @@ router.post('/logout', (req, res) => {
  * POST /auth/register
  * Create a new user (admin only)
  */
-router.post('/register', async (req, res) => {
+router.post('/register', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
-    // Verify admin token
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      const result = verifyToken(token);
-
-      if (!result.valid || result.user.role !== 'admin') {
-        return res.status(403).json({ error: 'Admin access required' });
-      }
-    } else {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
     const userData = req.body;
     const result = await createUser(userData);
 

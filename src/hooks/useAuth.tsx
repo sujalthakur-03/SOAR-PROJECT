@@ -1,5 +1,7 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useCallback, useState, ReactNode } from 'react';
 import { getBackendBaseUrl } from '@/lib/api-client';
+import { getSecondsUntilExpiry, isTokenExpired, isTokenExpiringSoon, EXPIRY_WARNING_SECONDS } from '@/lib/token-utils';
+import { toast } from 'sonner';
 
 interface User {
   id: string;
@@ -48,6 +50,63 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setLoading(false);
   }, []);
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SESSION EXPIRY MONITOR
+  // Checks JWT expiry every 30 seconds; warns 5 minutes before expiry,
+  // auto-logs out when the token has expired.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const expiryWarningShown = useRef(false);
+
+  const handleSessionExpired = useCallback(() => {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    setUser(null);
+    setSession(null);
+    toast.error('Session expired', {
+      description: 'Your session has expired. Please log in again.',
+      duration: 8000,
+    });
+    // Navigate to auth — use window.location since we are outside Router context
+    if (window.location.pathname !== '/auth') {
+      window.location.href = '/auth';
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!session?.token) {
+      expiryWarningShown.current = false;
+      return;
+    }
+
+    const checkExpiry = () => {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (!token) return;
+
+      if (isTokenExpired(token)) {
+        handleSessionExpired();
+        return;
+      }
+
+      if (isTokenExpiringSoon(token) && !expiryWarningShown.current) {
+        expiryWarningShown.current = true;
+        const remaining = getSecondsUntilExpiry(token);
+        const minutes = remaining ? Math.ceil(remaining / 60) : EXPIRY_WARNING_SECONDS / 60;
+        toast.warning('Session expiring soon', {
+          description: `Your session will expire in ~${minutes} minute${minutes !== 1 ? 's' : ''}. Save your work and log in again to continue.`,
+          duration: 15000,
+        });
+      }
+    };
+
+    // Check immediately on mount
+    checkExpiry();
+
+    // Then check every 30 seconds
+    const intervalId = setInterval(checkExpiry, 30_000);
+
+    return () => clearInterval(intervalId);
+  }, [session?.token, handleSessionExpired]);
+
   const signIn = async (username: string, password: string) => {
     try {
       // Use dynamic backend URL (no nginx proxy)
@@ -71,6 +130,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       setUser(data.user);
       setSession({ token: data.token });
+      expiryWarningShown.current = false; // Reset warning for fresh token
 
       return { error: null };
     } catch (error) {

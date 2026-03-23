@@ -15,6 +15,10 @@ import {
   Bell,
   FlaskConical,
   Loader2,
+  Download,
+  Upload,
+  Eye,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -55,6 +59,9 @@ import {
   useDeletePlaybook,
   useCreatePlaybook,
   useUpdatePlaybook,
+  useExportPlaybook,
+  useImportPlaybook,
+  useClonePlaybook,
   type Playbook
 } from '@/hooks/usePlaybooks';
 import { useCreateExecution } from '@/hooks/useExecutions';
@@ -89,6 +96,9 @@ export function PlaybookManager() {
   const createPlaybook = useCreatePlaybook();
   const updatePlaybook = useUpdatePlaybook();
   const createExecution = useCreateExecution();
+  const exportPlaybook = useExportPlaybook();
+  const importPlaybook = useImportPlaybook();
+  const clonePlaybook = useClonePlaybook();
   const { role } = useUserRole();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
@@ -99,6 +109,8 @@ export function PlaybookManager() {
   const [simulateTriggerData, setSimulateTriggerData] = useState('');
   const [selectedScenario, setSelectedScenario] = useState<string>('');
   const [simulationResult, setSimulationResult] = useState<{ execution_id: string; state: string } | null>(null);
+  const [simulationMode, setSimulationMode] = useState<'live' | 'dryrun'>('dryrun');
+  const [dryRunResult, setDryRunResult] = useState<{ steps: { name: string; type: string; action: string; would_execute: boolean }[] } | null>(null);
 
   const canEdit = canEditFeature('playbooks', role);
   const canDelete = canDeleteFeature('playbooks', role);
@@ -131,6 +143,51 @@ export function PlaybookManager() {
     } finally {
       setPlaybookToDelete(null);
     }
+  };
+
+  const handleExport = async (playbook: Playbook) => {
+    try {
+      await exportPlaybook.mutateAsync(playbook.id);
+      toast({ title: `Exported "${playbook.name}"` });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Failed to export playbook';
+      toast({ title: 'Export failed', description: msg, variant: 'destructive' });
+    }
+  };
+
+  const handleClone = async (playbook: Playbook) => {
+    try {
+      const result = await clonePlaybook.mutateAsync(playbook.id);
+      toast({
+        title: 'Playbook cloned',
+        description: `Created "${result.name}" (disabled)`,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Failed to clone playbook';
+      toast({ title: 'Clone failed', description: msg, variant: 'destructive' });
+    }
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      const result = await importPlaybook.mutateAsync(data);
+      toast({
+        title: 'Playbook imported',
+        description: `Created "${result.name}" (disabled)`,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Invalid playbook file';
+      toast({ title: 'Import failed', description: msg, variant: 'destructive' });
+    }
+
+    // Reset the input so the same file can be imported again
+    event.target.value = '';
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -393,6 +450,8 @@ export function PlaybookManager() {
     setSelectedScenario(first.id);
     setSimulateTriggerData(JSON.stringify(first.data, null, 2));
     setSimulationResult(null);
+    setDryRunResult(null);
+    setSimulationMode('dryrun');
     setPlaybookToSimulate(playbook);
   };
 
@@ -406,8 +465,59 @@ export function PlaybookManager() {
     }
   };
 
+  const handleDryRun = () => {
+    if (!playbookToSimulate) return;
+
+    let triggerData: any;
+    try {
+      triggerData = JSON.parse(simulateTriggerData);
+    } catch {
+      toast({ title: 'Invalid JSON', description: 'Fix the trigger data JSON and try again.', variant: 'destructive' });
+      return;
+    }
+
+    // Analyze what each step would do based on the trigger data
+    const steps = (playbookToSimulate.steps as any[]) || [];
+    const drySteps = steps.map((step: any) => {
+      const isShadow = (playbookToSimulate as any).dsl?.shadow_mode === true;
+      let action = '';
+      let wouldExecute = !isShadow;
+
+      switch (step.type) {
+        case 'enrichment':
+          action = `Lookup ${triggerData.source_ip || triggerData.data?.srcip || 'N/A'} via ${step.connector_id || 'connector'}`;
+          break;
+        case 'condition':
+          action = `Evaluate: ${step.condition?.field || 'field'} ${step.condition?.operator || '=='} ${step.condition?.value || 'value'}`;
+          break;
+        case 'action':
+          action = `Execute ${step.action_type || 'action'} via ${step.connector_id || 'connector'}`;
+          break;
+        case 'notification':
+          action = `Send notification via ${step.connector_id || 'channel'}`;
+          break;
+        case 'approval':
+          action = `Request approval (timeout: ${step.timeout_seconds || 300}s)`;
+          wouldExecute = true; // Approvals always pause
+          break;
+        default:
+          action = `Run ${step.type} step`;
+      }
+
+      return { name: step.name || step.step_id, type: step.type, action, would_execute: wouldExecute };
+    });
+
+    setDryRunResult({ steps: drySteps });
+    toast({ title: 'Dry-run complete', description: `Analyzed ${drySteps.length} steps` });
+  };
+
   const handleConfirmSimulate = async () => {
     if (!playbookToSimulate) return;
+
+    if (simulationMode === 'dryrun') {
+      handleDryRun();
+      return;
+    }
 
     let triggerData: any;
     try {
@@ -427,7 +537,7 @@ export function PlaybookManager() {
       setSimulationResult({ execution_id: execId, state: result.state || 'EXECUTING' });
       toast({
         title: 'Simulation started',
-        description: `Execution ${execId} created`,
+        description: `Execution ${execId} created — connectors will execute real actions`,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to start simulation';
@@ -528,10 +638,23 @@ export function PlaybookManager() {
           </p>
         </div>
         {canEdit && (
-          <Button onClick={() => setIsEditorOpen(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            New Playbook
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => document.getElementById('playbook-import-input')?.click()}>
+              <Upload className="h-4 w-4 mr-2" />
+              Import
+            </Button>
+            <input
+              id="playbook-import-input"
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={handleImportFile}
+            />
+            <Button onClick={() => setIsEditorOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              New Playbook
+            </Button>
+          </div>
         )}
       </div>
 
@@ -615,9 +738,13 @@ export function PlaybookManager() {
                             <Edit className="h-4 w-4 mr-2" />
                             Edit
                           </DropdownMenuItem>
-                          <DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleClone(playbook)}>
                             <Copy className="h-4 w-4 mr-2" />
-                            Duplicate
+                            Clone
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleExport(playbook)}>
+                            <Download className="h-4 w-4 mr-2" />
+                            Export
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenSimulate(playbook)}>
                             <Play className="h-4 w-4 mr-2" />
@@ -744,6 +871,47 @@ export function PlaybookManager() {
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto space-y-4">
+            {/* Mode toggle */}
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/50 border">
+              <button
+                type="button"
+                onClick={() => { setSimulationMode('dryrun'); setSimulationResult(null); setDryRunResult(null); }}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all',
+                  simulationMode === 'dryrun'
+                    ? 'bg-background border shadow-sm text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <Eye className="h-4 w-4" />
+                Dry Run
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSimulationMode('live'); setSimulationResult(null); setDryRunResult(null); }}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all',
+                  simulationMode === 'live'
+                    ? 'bg-background border shadow-sm text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <Play className="h-4 w-4" />
+                Live Execution
+              </button>
+            </div>
+
+            {/* Live mode warning */}
+            {simulationMode === 'live' && (
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+                <div className="text-xs">
+                  <span className="font-medium text-amber-600">Live mode</span>
+                  <span className="text-muted-foreground"> — This will create a real execution. Connectors will make actual API calls (VirusTotal lookups, Slack messages, IP blocks, etc.).</span>
+                </div>
+              </div>
+            )}
+
             {/* Scenario picker */}
             {playbookToSimulate && (() => {
               const scenarios = buildScenarios(playbookToSimulate);
@@ -825,7 +993,42 @@ export function PlaybookManager() {
               </div>
             )}
 
-            {/* Simulation result */}
+            {/* Dry-run result */}
+            {dryRunResult && (
+              <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Eye className="h-4 w-4 text-blue-500" />
+                  <span className="text-sm font-medium text-blue-600">Dry Run Analysis</span>
+                  <Badge variant="outline" className="text-xs ml-auto">{dryRunResult.steps.length} steps</Badge>
+                </div>
+                <div className="space-y-1.5">
+                  {dryRunResult.steps.map((step, i) => {
+                    const Icon = stepTypeIcons[step.type as StepType] || Zap;
+                    return (
+                      <div key={i} className="flex items-start gap-2 p-2 rounded bg-background border text-xs">
+                        <div className="flex items-center gap-1.5 min-w-[100px]">
+                          <span className="text-muted-foreground font-mono w-4">{i + 1}.</span>
+                          <Icon className="h-3.5 w-3.5 shrink-0" />
+                          <span className="font-medium truncate">{step.name}</span>
+                        </div>
+                        <span className="text-muted-foreground flex-1">{step.action}</span>
+                        <Badge
+                          variant="outline"
+                          className={cn('text-[10px] shrink-0', step.would_execute ? 'text-amber-600 border-amber-300' : 'text-emerald-600 border-emerald-300')}
+                        >
+                          {step.would_execute ? 'WILL EXECUTE' : 'SKIPPED (shadow)'}
+                        </Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  No execution was created. Switch to <strong>Live Execution</strong> mode to run for real.
+                </p>
+              </div>
+            )}
+
+            {/* Live simulation result */}
             {simulationResult && (
               <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 space-y-2">
                 <div className="flex items-center gap-2">
@@ -845,23 +1048,29 @@ export function PlaybookManager() {
           </div>
 
           <DialogFooter className="border-t pt-4">
-            <Button variant="outline" onClick={() => { setPlaybookToSimulate(null); setSimulationResult(null); }}>
+            <Button variant="outline" onClick={() => { setPlaybookToSimulate(null); setSimulationResult(null); setDryRunResult(null); }}>
               {simulationResult ? 'Close' : 'Cancel'}
             </Button>
             {!simulationResult && (
               <Button
                 onClick={handleConfirmSimulate}
                 disabled={createExecution.isPending}
+                variant={simulationMode === 'live' ? 'default' : 'outline'}
               >
                 {createExecution.isPending ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     Creating Execution...
                   </>
+                ) : simulationMode === 'dryrun' ? (
+                  <>
+                    <Eye className="h-4 w-4 mr-2" />
+                    Analyze Steps
+                  </>
                 ) : (
                   <>
                     <Play className="h-4 w-4 mr-2" />
-                    Run Simulation
+                    Run Live Simulation
                   </>
                 )}
               </Button>

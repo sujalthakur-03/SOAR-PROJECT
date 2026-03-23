@@ -10,6 +10,7 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import CaseDetailView from "@/components/views/CaseDetailView";
+import ExecutionDetailView from "@/components/views/ExecutionDetailView";
 
 const queryClient = new QueryClient();
 
@@ -43,7 +44,7 @@ const App = () => (
               path="/executions/:executionId"
               element={
                 <ProtectedRoute>
-                  <Index />
+                  <ExecutionDetailView />
                 </ProtectedRoute>
               }
             />

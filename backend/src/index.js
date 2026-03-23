@@ -17,10 +17,13 @@ import triggerWebhookRoutes from './routes/trigger-webhook-routes.js';
 import webhookManagementRoutes from './routes/webhook-management.js';
 import apiRoutes from './routes/api.js';
 import authRoutes from './routes/auth.js';
+import userRoutes from './routes/user-routes.js';
 import socRoutes from './routes/soc-routes.js';
 import caseRoutes from './routes/case-routes.js';
+import playbookRoutes from './routes/playbook-routes.js';
 import { webhookSecurityMiddleware, securityRouter } from './middleware/webhook-security.js';
 import authMiddleware from './middleware/auth.js';
+import { seedDefaultUsers } from './services/auth-service.js';
 
 // Load environment variables
 dotenv.config();
@@ -58,7 +61,9 @@ app.use('/auth', authRoutes);
 app.use('/api', authMiddleware);
 
 // Protected API routes
+app.use('/api/v2', playbookRoutes);  // Versioned Playbook API (import/export/clone)
 app.use('/api', apiRoutes);
+app.use('/api', userRoutes);  // User Management API (admin CRUD)
 app.use('/api', caseRoutes);  // Case Management API (Agent 15)
 app.use('/api/security', securityRouter);  // Security observability endpoints
 app.use('/api/soc', socRoutes);  // SOC Metrics & SLA API (Agent 13)
@@ -190,6 +195,9 @@ async function start() {
     }
 
     logger.info('MongoDB connected and operational');
+
+    // Seed default users if they don't exist
+    await seedDefaultUsers();
 
     // Start Express server
     const server = app.listen(PORT, () => {

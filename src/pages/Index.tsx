@@ -11,6 +11,7 @@ import { AuditLog } from '@/components/views/AuditLog';
 import { MetricsDashboard } from '@/components/views/MetricsDashboard';
 import CasesDashboard from '@/components/views/CasesDashboard';
 import { SettingsPage } from '@/components/views/SettingsPage';
+import { UserManagement } from '@/components/views/UserManagement';
 import { useUserRole } from '@/hooks/useUserRole';
 import { canViewFeature } from '@/lib/permissions';
 
@@ -23,6 +24,7 @@ const viewComponents: Record<string, React.ComponentType> = {
   metrics: MetricsDashboard,
   cases: CasesDashboard,
   settings: SettingsPage,
+  users: UserManagement,
 };
 
 const Index = () => {

@@ -129,6 +129,49 @@ export const useUpdatePlaybook = () => {
 };
 
 // ============================================================================
+// EXPORT, IMPORT, CLONE
+// ============================================================================
+
+export const useExportPlaybook = () => {
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const blob = await apiClient.exportPlaybook(id);
+      // Trigger browser download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `playbook-${id}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+  });
+};
+
+export const useImportPlaybook = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: any) => apiClient.importPlaybook(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['playbooks'] });
+    },
+  });
+};
+
+export const useClonePlaybook = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => apiClient.clonePlaybook(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['playbooks'] });
+    },
+  });
+};
+
+// ============================================================================
 // WEBHOOKS & TRIGGERS
 // ============================================================================
 

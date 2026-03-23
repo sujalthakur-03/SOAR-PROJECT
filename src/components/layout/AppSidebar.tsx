@@ -35,6 +35,7 @@ const navItems = [
   { id: 'audit', label: 'Audit Log', icon: FileText, feature: 'audit' },
   { id: 'metrics', label: 'Metrics', icon: BarChart3, feature: 'metrics' },
   { id: 'settings', label: 'Settings', icon: Settings, feature: 'settings' },
+  { id: 'users', label: 'Users', icon: Shield, feature: 'userManagement' },
 ];
 
 const roleLabels = {

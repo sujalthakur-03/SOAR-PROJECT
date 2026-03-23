@@ -53,12 +53,15 @@ import {
   getAuditStats
 } from '../services/audit-service.js';
 import logger from '../utils/logger.js';
+import { Execution, PlaybookVersioned } from '../models/index.js';
+import Case from '../models/case.js';
 import {
   validatePagination,
   validateSeverity,
   validateExecutionState,
   validateCaseStatus
 } from '../middleware/validate.js';
+import { requireRole } from '../middleware/auth.js';
 
 // Import versioned playbook routes (Agent 9)
 import playbookRoutesV2 from './playbook-routes.js';
@@ -117,7 +120,7 @@ router.get('/playbooks/:id', async (req, res) => {
  * POST /api/playbooks
  * Create a new playbook
  */
-router.post('/playbooks', async (req, res) => {
+router.post('/playbooks', requireRole('admin', 'engineer', 'senior_analyst'), async (req, res) => {
   try {
     const userId = req.user?.email || 'system';
     const playbook = await createPlaybook(req.body, userId);
@@ -132,7 +135,7 @@ router.post('/playbooks', async (req, res) => {
  * PUT /api/playbooks/:id
  * Update a playbook
  */
-router.put('/playbooks/:id', async (req, res) => {
+router.put('/playbooks/:id', requireRole('admin', 'engineer', 'senior_analyst'), async (req, res) => {
   try {
     const userId = req.user?.email || 'system';
     const playbook = await updatePlaybook(req.params.id, req.body, userId);
@@ -147,7 +150,7 @@ router.put('/playbooks/:id', async (req, res) => {
  * PATCH /api/playbooks/:id/toggle
  * Toggle playbook enabled/disabled
  */
-router.patch('/playbooks/:id/toggle', async (req, res) => {
+router.patch('/playbooks/:id/toggle', requireRole('admin', 'engineer', 'senior_analyst'), async (req, res) => {
   try {
     const { enabled } = req.body;
     const playbook = await togglePlaybook(req.params.id, enabled);
@@ -162,7 +165,7 @@ router.patch('/playbooks/:id/toggle', async (req, res) => {
  * DELETE /api/playbooks/:id
  * Delete a playbook
  */
-router.delete('/playbooks/:id', async (req, res) => {
+router.delete('/playbooks/:id', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     await deletePlaybook(req.params.id);
     res.json({ success: true, id: req.params.id });
@@ -204,7 +207,7 @@ router.get('/playbooks/:id/webhook', async (req, res) => {
  * POST /api/playbooks/:id/webhook/rotate
  * Rotate webhook secret for a playbook
  */
-router.post('/playbooks/:id/webhook/rotate', async (req, res) => {
+router.post('/playbooks/:id/webhook/rotate', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const result = await rotateWebhookSecret(req.params.id);
     res.json(result);
@@ -218,7 +221,7 @@ router.post('/playbooks/:id/webhook/rotate', async (req, res) => {
  * PATCH /api/playbooks/:id/webhook/toggle
  * Enable or disable webhook for a playbook
  */
-router.patch('/playbooks/:id/webhook/toggle', async (req, res) => {
+router.patch('/playbooks/:id/webhook/toggle', requireRole('admin', 'engineer', 'senior_analyst'), async (req, res) => {
   try {
     const { enabled } = req.body;
     const result = await toggleWebhook(req.params.id, enabled);
@@ -438,7 +441,7 @@ router.get('/approvals/:id', async (req, res) => {
  * POST /api/approvals/:id/approve
  * Approve an action
  */
-router.post('/approvals/:id/approve', async (req, res) => {
+router.post('/approvals/:id/approve', requireRole('admin', 'senior_analyst', 'analyst'), async (req, res) => {
   try {
     const { note } = req.body;
     const userId = req.user?.email || 'analyst';
@@ -454,7 +457,7 @@ router.post('/approvals/:id/approve', async (req, res) => {
  * POST /api/approvals/:id/reject
  * Reject an action
  */
-router.post('/approvals/:id/reject', async (req, res) => {
+router.post('/approvals/:id/reject', requireRole('admin', 'senior_analyst', 'analyst'), async (req, res) => {
   try {
     const { note } = req.body;
     const userId = req.user?.email || 'analyst';
@@ -511,7 +514,7 @@ router.get('/connectors/:id', async (req, res) => {
  * POST /api/connectors
  * Create a new connector
  */
-router.post('/connectors', async (req, res) => {
+router.post('/connectors', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const userId = req.user?.email || 'system';
     const connector = await createConnector(req.body, userId);
@@ -526,7 +529,7 @@ router.post('/connectors', async (req, res) => {
  * PUT /api/connectors/:id
  * Update a connector
  */
-router.put('/connectors/:id', async (req, res) => {
+router.put('/connectors/:id', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const userId = req.user?.email || 'system';
     const connector = await updateConnector(req.params.id, req.body, userId);
@@ -541,7 +544,7 @@ router.put('/connectors/:id', async (req, res) => {
  * PATCH /api/connectors/:id/toggle
  * Toggle connector enabled/disabled
  */
-router.patch('/connectors/:id/toggle', async (req, res) => {
+router.patch('/connectors/:id/toggle', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const { enabled } = req.body;
     const connector = await toggleConnector(req.params.id, enabled);
@@ -556,7 +559,7 @@ router.patch('/connectors/:id/toggle', async (req, res) => {
  * DELETE /api/connectors/:id
  * Delete a connector
  */
-router.delete('/connectors/:id', async (req, res) => {
+router.delete('/connectors/:id', requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const userId = req.user?.email || 'system';
     await deleteConnector(req.params.id, userId);
@@ -686,6 +689,85 @@ router.get('/metrics', async (req, res) => {
   } catch (error) {
     logger.error('Error fetching metrics:', error);
     res.status(500).json({ error: 'Failed to fetch metrics', message: error.message });
+  }
+});
+
+// ============================================================================
+// GLOBAL SEARCH
+// ============================================================================
+
+/**
+ * GET /api/search?q=<query>
+ * Search across executions, playbooks, and cases
+ * Returns up to 5 results per type, grouped by type
+ */
+router.get('/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || typeof q !== 'string' || q.trim().length === 0) {
+      return res.json({ executions: [], playbooks: [], cases: [] });
+    }
+
+    const query = q.trim();
+    // Escape regex special characters for safe $regex usage
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = { $regex: escaped, $options: 'i' };
+
+    // Search executions: match on execution_id, playbook_name, trigger_data fields
+    const executionQuery = {
+      $or: [
+        { execution_id: regex },
+        { playbook_name: regex },
+        { 'trigger_data.rule.description': regex },
+        { 'trigger_data.agent.name': regex },
+        { 'trigger_data.agent.ip': regex },
+        { 'trigger_data.source_ip': regex },
+        { 'trigger_data.srcip': regex },
+        { 'trigger_data.data.srcip': regex }
+      ]
+    };
+
+    // Search playbooks (versioned): match on name, description, playbook_id
+    // Only return the latest enabled version per playbook_id
+    const playbookQuery = {
+      $or: [
+        { playbook_id: regex },
+        { name: regex },
+        { description: regex }
+      ]
+    };
+
+    // Search cases: match on case_id, title, description
+    const caseQuery = {
+      $or: [
+        { case_id: regex },
+        { title: regex },
+        { description: regex }
+      ]
+    };
+
+    const [executions, playbooks, cases] = await Promise.all([
+      Execution.find(executionQuery)
+        .select('execution_id playbook_name state trigger_data.rule.description trigger_data.severity created_at')
+        .sort({ created_at: -1 })
+        .limit(5)
+        .lean(),
+      PlaybookVersioned.find({ ...playbookQuery, enabled: true })
+        .select('playbook_id name description version enabled created_at')
+        .sort({ created_at: -1 })
+        .limit(5)
+        .lean(),
+      Case.find(caseQuery)
+        .select('case_id title description severity status created_at')
+        .sort({ created_at: -1 })
+        .limit(5)
+        .lean()
+    ]);
+
+    res.json({ executions, playbooks, cases });
+  } catch (error) {
+    logger.error('Error performing global search:', error);
+    res.status(500).json({ error: 'Search failed', message: error.message });
   }
 });
 
