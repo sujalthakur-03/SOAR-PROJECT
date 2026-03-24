@@ -172,9 +172,30 @@ export function PlaybookManager() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const MAX_IMPORT_SIZE = 5 * 1024 * 1024; // 5MB
+    if (file.size > MAX_IMPORT_SIZE) {
+      toast({ title: 'File too large', description: 'Playbook file must be under 5MB', variant: 'destructive' });
+      event.target.value = '';
+      return;
+    }
+
     try {
       const text = await file.text();
-      const data = JSON.parse(text);
+
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        toast({ title: 'Invalid file', description: 'File is not valid JSON. Please export a playbook and try again.', variant: 'destructive' });
+        event.target.value = '';
+        return;
+      }
+
+      if (!data.name || !data.dsl?.steps) {
+        toast({ title: 'Invalid playbook', description: 'File must contain a playbook with name and DSL steps.', variant: 'destructive' });
+        event.target.value = '';
+        return;
+      }
 
       const result = await importPlaybook.mutateAsync(data);
       toast({
@@ -182,7 +203,7 @@ export function PlaybookManager() {
         description: `Created "${result.name}" (disabled)`,
       });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Invalid playbook file';
+      const msg = error instanceof Error ? error.message : 'Import failed';
       toast({ title: 'Import failed', description: msg, variant: 'destructive' });
     }
 

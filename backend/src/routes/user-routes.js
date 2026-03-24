@@ -82,6 +82,20 @@ router.put('/users/:id', requireRole('admin'), async (req, res) => {
   try {
     const { role, fullName, full_name, email, status } = req.body;
 
+    const VALID_ROLES = ['viewer', 'analyst', 'senior_analyst', 'engineer', 'admin', 'security_admin'];
+    if (role !== undefined && !VALID_ROLES.includes(role)) {
+      return res.status(400).json({ error: `Invalid role. Must be one of: ${VALID_ROLES.join(', ')}` });
+    }
+
+    if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    const VALID_STATUSES = ['active', 'inactive', 'locked', 'pending'];
+    if (status !== undefined && !VALID_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
+    }
+
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -150,9 +164,9 @@ router.delete('/users/:id', requireRole('admin'), async (req, res) => {
  */
 router.post('/users/:id/reset-password', requireRole('admin'), async (req, res) => {
   try {
-    const { password } = req.body;
+    const password = req.body.password?.trim();
     if (!password || password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      return res.status(400).json({ error: 'Password must be at least 8 characters (excluding whitespace)' });
     }
 
     const user = await User.findById(req.params.id);

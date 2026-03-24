@@ -198,7 +198,7 @@ export async function createExecution(playbookId, triggerData, triggerSource = '
       }));
     } else {
       // Fallback to legacy Playbook model
-      playbook = await Playbook.findOne({ playbook_id: playbookId });
+      playbook = await Playbook.findOne({ playbook_id: playbookId, enabled: true });
       if (playbook) {
         steps = (playbook.steps || []).map(step => ({
           step_id: step.step_id,
@@ -209,6 +209,10 @@ export async function createExecution(playbookId, triggerData, triggerSource = '
 
     if (!playbook) {
       throw new Error(`Playbook not found: ${playbookId}`);
+    }
+
+    if (!steps || steps.length === 0) {
+      throw new Error('Playbook has no steps to execute');
     }
 
     // For manual/simulation executions, provide defaults for fields

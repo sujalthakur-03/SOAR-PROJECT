@@ -155,6 +155,8 @@ class APIClient {
     return response.json();
   }
 
+  private static isRedirecting = false;
+
   private async request<T>(
     endpoint: string,
     options?: RequestInit
@@ -167,9 +169,12 @@ class APIClient {
     if (token && typeof window !== 'undefined' && window.location.pathname !== '/auth') {
       const { isTokenExpired, isTokenExpiringSoon } = await import('@/lib/token-utils');
       if (isTokenExpired(token)) {
-        localStorage.removeItem('cybersentinel_auth_token');
-        localStorage.removeItem('cybersentinel_auth_user');
-        window.location.href = '/auth';
+        if (!APIClient.isRedirecting) {
+          APIClient.isRedirecting = true;
+          localStorage.removeItem('cybersentinel_auth_token');
+          localStorage.removeItem('cybersentinel_auth_user');
+          window.location.href = '/auth';
+        }
         throw new Error('Session expired. Please log in again.');
       }
       if (isTokenExpiringSoon(token)) {
@@ -192,7 +197,8 @@ class APIClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        if (typeof window !== 'undefined' && window.location.pathname !== '/auth') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/auth' && !APIClient.isRedirecting) {
+          APIClient.isRedirecting = true;
           localStorage.removeItem('cybersentinel_auth_token');
           localStorage.removeItem('cybersentinel_auth_user');
           window.location.href = '/auth';

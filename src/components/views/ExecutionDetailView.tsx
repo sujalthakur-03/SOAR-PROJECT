@@ -267,7 +267,7 @@ const ExecutionDetailView = () => {
   // Fetch playbook DSL for step metadata
   const { data: playbook } = useQuery({
     queryKey: ['playbook-detail', execution?.playbook_id],
-    queryFn: () => apiClient.getPlaybook(execution.playbook_id),
+    queryFn: () => apiClient.getPlaybook(execution!.playbook_id),
     enabled: !!execution?.playbook_id,
   });
 

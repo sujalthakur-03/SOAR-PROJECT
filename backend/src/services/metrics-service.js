@@ -71,19 +71,31 @@ export function resetMetrics() {
  *
  * @returns {Promise<object>} Dashboard metrics
  */
+const METRICS_TIMEOUT_MS = 5000;
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Metrics query timeout')), ms))
+  ]);
+}
+
 export async function getMetrics() {
   const now = new Date();
   const twentyFourHoursAgo = new Date(now - 24 * 60 * 60 * 1000);
 
-  // Run all queries in parallel for speed
-  const [
-    mttrResult,
-    failedCount,
-    pendingApprovalCount,
-    alertsProcessed24h,
-    automationCounts,
-    connectorHealth,
-  ] = await Promise.all([
+  let mttrResult, failedCount, pendingApprovalCount, alertsProcessed24h, automationCounts, connectorHealth;
+
+  try {
+    // Run all queries in parallel with timeout protection
+    [
+      mttrResult,
+      failedCount,
+      pendingApprovalCount,
+      alertsProcessed24h,
+      automationCounts,
+      connectorHealth,
+    ] = await withTimeout(Promise.all([
     // MTTR: avg seconds from created_at to completed_at for COMPLETED in last 24h
     Execution.aggregate([
       {
@@ -136,7 +148,22 @@ export async function getMetrics() {
 
     // Connector health from connectors collection
     getConnectorHealth(),
-  ]);
+  ]), METRICS_TIMEOUT_MS);
+  } catch (error) {
+    // On timeout or DB error, return fallback values from in-memory counters
+    return {
+      mttr_seconds: 0,
+      automated_actions: getCounter('actions_automated'),
+      manual_actions: getCounter('actions_manual'),
+      automation_rate: 0,
+      failed_executions: getCounter('executions_failed'),
+      pending_approvals: 0,
+      alerts_processed_24h: getCounter('webhooks_received'),
+      connector_health: { healthy: 0, degraded: 0, error: 0 },
+      _fallback: true,
+      _error: error.message,
+    };
+  }
 
   // MTTR in seconds
   const mttrSeconds =

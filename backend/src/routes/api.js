@@ -709,6 +709,9 @@ router.get('/search', async (req, res) => {
     }
 
     const query = q.trim();
+    if (query.length > 200) {
+      return res.status(400).json({ error: 'Search query too long (max 200 characters)' });
+    }
     // Escape regex special characters for safe $regex usage
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = { $regex: escaped, $options: 'i' };

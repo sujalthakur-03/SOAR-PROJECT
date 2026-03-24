@@ -175,6 +175,9 @@ router.post('/cases/from-execution/:execution_id', async (req, res) => {
     );
     res.status(201).json(caseDoc);
   } catch (error) {
+    if (error.message?.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
     logger.error('Error creating case from execution:', error);
     res.status(500).json({ error: 'Failed to create case', message: error.message });
   }

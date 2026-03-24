@@ -33,20 +33,28 @@ export async function seedDefaultUsers() {
 
   for (const def of defaults) {
     try {
-      const existing = await User.findOne({ email: def.email });
-      if (!existing) {
-        const user = new User({
-          email: def.email,
-          password_hash: def.password, // pre-save hook will bcrypt-hash this
-          full_name: def.full_name,
-          role: def.role,
-          status: 'active',
-        });
-        await user.save();
-        logger.info(`Seeded default user: ${def.email} (${def.role})`);
-      }
+      // Hash password manually since findOneAndUpdate bypasses pre-save hooks
+      const hashedPassword = await bcrypt.hash(def.password, 10);
+      await User.findOneAndUpdate(
+        { email: def.email },
+        {
+          $setOnInsert: {
+            email: def.email,
+            password_hash: hashedPassword,
+            full_name: def.full_name,
+            role: def.role,
+            status: 'active',
+          }
+        },
+        { upsert: true, new: true }
+      );
+      logger.info(`Default user ensured: ${def.email} (${def.role})`);
     } catch (error) {
-      logger.error(`Error seeding user ${def.email}:`, error);
+      if (error.code === 11000) {
+        logger.info(`Default user already exists: ${def.email}`);
+      } else {
+        logger.error(`Error seeding user ${def.email}:`, error);
+      }
     }
   }
 }

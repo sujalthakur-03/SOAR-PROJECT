@@ -172,6 +172,10 @@ export function UserManagement() {
       toast.error('All fields are required');
       return;
     }
+    if (newUser.password.length < 8) {
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
     try {
       await createUser.mutateAsync(newUser);
       toast.success(`User "${newUser.username}" created successfully`);
@@ -196,6 +200,13 @@ export function UserManagement() {
 
   const handleDeactivateUser = async () => {
     if (!selectedUser) return;
+    const currentUser = JSON.parse(localStorage.getItem('cybersentinel_auth_user') || '{}');
+    if (selectedUser.id === currentUser.id) {
+      toast.error('You cannot deactivate your own account');
+      setDeactivateDialogOpen(false);
+      setSelectedUser(null);
+      return;
+    }
     try {
       await deactivateUser.mutateAsync(selectedUser.id);
       toast.success(`User "${selectedUser.username}" deactivated`);

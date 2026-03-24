@@ -249,6 +249,22 @@ export function recordFingerprint(fingerprint) {
   FINGERPRINT_CACHE.set(fingerprint, Date.now());
 }
 
+/**
+ * Atomically claim a fingerprint (check + record in one step).
+ * Prevents race condition where two concurrent requests both pass
+ * isDuplicateFingerprint() before either calls recordFingerprint().
+ *
+ * @param {string} fingerprint - Fingerprint to claim
+ * @returns {boolean} - True if claimed (first caller wins), false if already exists
+ */
+export function claimFingerprint(fingerprint) {
+  if (FINGERPRINT_CACHE.has(fingerprint)) {
+    return false;
+  }
+  FINGERPRINT_CACHE.set(fingerprint, Date.now());
+  return true;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // INGESTION RESULT
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -501,7 +517,8 @@ export async function processWebhookIngestion(webhookId, providedSecret, alertPa
     conditionFields
   );
 
-  if (isDuplicateFingerprint(fingerprint)) {
+  // Atomically claim fingerprint to prevent race condition with concurrent requests
+  if (!claimFingerprint(fingerprint)) {
     logger.info(`[WebhookIngestion] DROP: ${DropReason.DUPLICATE_FINGERPRINT}`, {
       webhook_id: webhookId,
       fingerprint_prefix: fingerprint.substring(0, 16)
@@ -593,8 +610,7 @@ export async function processWebhookIngestion(webhookId, providedSecret, alertPa
 
   let execution;
   try {
-    // Record fingerprint BEFORE creating execution to prevent race conditions
-    recordFingerprint(fingerprint);
+    // Fingerprint already claimed in step 8 via claimFingerprint()
 
     // Create execution with hardened metadata
     execution = await createHardenedExecution(
@@ -741,8 +757,17 @@ async function createHardenedExecution(playbook, alertPayload, webhookId, trigge
 
   // Execute asynchronously
   setImmediate(() => {
-    engine.execute().catch(error => {
+    engine.execute().catch(async (error) => {
       logger.error(`[createHardenedExecution] Execution failed: ${error.message}`);
+      try {
+        execution.state = 'FAILED';
+        execution.error = { message: error.message };
+        execution.completed_at = new Date();
+        await execution.save();
+        logger.info(`[createHardenedExecution] Execution ${execution.execution_id} marked FAILED`);
+      } catch (saveErr) {
+        logger.error(`[createHardenedExecution] Failed to update execution state: ${saveErr.message}`);
+      }
     });
   });
 
@@ -882,6 +907,7 @@ export default {
   extractConditionFields,
   isDuplicateFingerprint,
   recordFingerprint,
+  claimFingerprint,
 
   // Webhook lifecycle
   createWebhookForPlaybook,
