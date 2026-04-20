@@ -176,6 +176,11 @@ step_check_env() {
     # Generate a random SSO secret (for SIEM → SOAR token exchange)
     SOAR_SSO_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
 
+    # Auto-detect server IP for CORS
+    DEPLOY_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+    CORS_ORIGINS="http://localhost:3022"
+    [ -n "$DEPLOY_IP" ] && CORS_ORIGINS="${CORS_ORIGINS},http://${DEPLOY_IP}:3022"
+
     cat > "$ENV_FILE" << ENVEOF
 # ══════════════════════════════════════════════════════════════
 # CyberSentinel SOAR v3.0 — Backend Environment Configuration
@@ -227,7 +232,7 @@ FIREWALL_API_KEY=
 WEBHOOK_TRUSTED_IPS=127.0.0.1,::1,::ffff:127.0.0.1
 
 # ── CORS ──
-CORS_ORIGIN=http://localhost:3022
+CORS_ORIGIN=${CORS_ORIGINS}
 
 # ── SSO (SIEM → SOAR token exchange) ──
 SOAR_SSO_SECRET=${SOAR_SSO_SECRET}
