@@ -8,6 +8,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
+import SSOCallback from "./pages/SSOCallback";
 import NotFound from "./pages/NotFound";
 import CaseDetailView from "@/components/views/CaseDetailView";
 import ExecutionDetailView from "@/components/views/ExecutionDetailView";
@@ -24,6 +25,7 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
+            <Route path="/auth/sso" element={<SSOCallback />} />
             <Route
               path="/"
               element={

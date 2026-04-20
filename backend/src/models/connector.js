@@ -27,6 +27,7 @@ const connectorSchema = new mongoose.Schema({
       'cortex',
       'cybersentinel',
       'cybersentinel_blocklist',
+      'cybersentinel_response',
       'virustotal',
       'abuseipdb',
       'alienvault_otx',

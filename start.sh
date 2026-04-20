@@ -66,7 +66,10 @@ NODE_ENV=production
 MONGODB_URI=mongodb://soar-database:27017
 MONGODB_DB_NAME=cybersentinel
 
-CORS_ORIGIN=http://localhost:3000
+CORS_ORIGIN=http://localhost:3022
+
+# SSO (SIEM → SOAR token exchange)
+SOAR_SSO_SECRET=
 
 # Connector API keys (optional — fill in to enable enrichment)
 VIRUSTOTAL_API_KEY=
@@ -132,9 +135,9 @@ if [ "$DB_HEALTH" = "healthy" ] && [ "$BE_HEALTH" = "healthy" ] && [ "$FE_HEALTH
     echo -e "${GREEN}${BOLD}║  CyberSentinel SOAR v3.0 is running!                      ║${NC}"
     echo -e "${GREEN}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  Frontend  → ${CYAN}http://${SERVER_IP}:3000${NC}"
-    echo -e "  Backend   → ${CYAN}http://${SERVER_IP}:3001${NC}"
-    echo -e "  Health    → ${CYAN}http://${SERVER_IP}:3001/health${NC}"
+    echo -e "  Frontend  → ${CYAN}http://${SERVER_IP}:3022${NC}"
+    echo -e "  Backend   → ${CYAN}http://${SERVER_IP}:3024${NC}"
+    echo -e "  Health    → ${CYAN}http://${SERVER_IP}:3024/health${NC}"
     echo ""
     echo -e "  Default login: ${BOLD}soaradmin${NC} / ${BOLD}CyberSentinelSOAR@2026${NC}"
     echo ""

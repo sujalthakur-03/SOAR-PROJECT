@@ -19,6 +19,7 @@ import Connector from '../models/connector.js';
 import { incrementMetric } from '../services/metrics-service.js';
 import logger from '../utils/logger.js';
 import { cybersentinelBlocklistConnector } from '../connectors/cybersentinel-blocklist.connector.js';
+import { cybersentinelResponseConnector } from '../connectors/cybersentinel-response.connector.js';
 import { virustotalConnector } from '../connectors/virustotal.connector.js';
 import { emailConnector } from '../connectors/email.connector.js';
 import { alienvaultOtxConnector } from '../connectors/alienvault-otx.connector.js';
@@ -503,6 +504,7 @@ function normalizeError(error) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 registerConnector('cybersentinel_blocklist', cybersentinelBlocklistConnector);
+registerConnector('cybersentinel_response', cybersentinelResponseConnector);
 registerConnector('virustotal', virustotalConnector);
 registerConnector('email', emailConnector);
 registerConnector('alienvault-otx', alienvaultOtxConnector);

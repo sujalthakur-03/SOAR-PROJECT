@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, AlertCircle, CheckCircle2, Info, Play, Loader2, ChevronDown, ChevronUp, FileText, Terminal, Database, Copy, Link, Plus, Trash2, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,6 +30,8 @@ import { useToast } from '@/hooks/use-toast';
 import { getStepDefinition } from './StepPalette';
 import { PlaybookLogsPanel, type StepTestLog } from './PlaybookLogsPanel';
 import { VariableContextExplorer } from './VariableContextExplorer';
+import { ObservableFieldPicker, InsertFieldButton } from './ObservableFieldPicker';
+import { nodesToStepDescriptors, type PreviousStepDescriptor } from './observable-fields';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -149,10 +151,28 @@ function validateStepConfig(stepType: string, subtype: string | undefined, confi
           errors.push({ field: 'parameters.ip', message: 'IP address is required' });
         }
       }
-      if (subtype === 'kill_process') {
+      if (subtype === 'kill_process' || config.action === 'kill_process') {
         const params = config.parameters as Record<string, unknown> || {};
+        if (!params.agent_id) {
+          errors.push({ field: 'parameters.agent_id', message: 'Agent ID is required' });
+        }
         if (!params.pid && !params.process_name) {
           errors.push({ field: 'parameters', message: 'PID or process name is required' });
+        }
+      }
+      if (subtype === 'isolate_host' || config.action === 'isolate_host') {
+        const params = config.parameters as Record<string, unknown> || {};
+        if (!params.agent_id) {
+          errors.push({ field: 'parameters.agent_id', message: 'Agent ID is required' });
+        }
+      }
+      if (subtype === 'disable_user' || config.action === 'disable_user') {
+        const params = config.parameters as Record<string, unknown> || {};
+        if (!params.agent_id) {
+          errors.push({ field: 'parameters.agent_id', message: 'Agent ID is required' });
+        }
+        if (!params.username) {
+          errors.push({ field: 'parameters.username', message: 'Username is required' });
         }
       }
       break;
@@ -886,6 +906,15 @@ export function StepConfigPanel({ node, playbookId, onClose, onUpdate, nodes = [
   // Get step definition for additional context
   const stepDef = subtype ? getStepDefinition(subtype) : undefined;
 
+  // Build the list of steps that come BEFORE this one so the
+  // ObservableFieldPicker can surface their outputs. `nodes` is the React
+  // Flow node array; we convert it to descriptors and then slice off
+  // everything after the current node.
+  const allDescriptors = nodesToStepDescriptors(nodes);
+  const currentIndex = allDescriptors.findIndex(s => s.step_id === node.id);
+  const previousSteps: PreviousStepDescriptor[] =
+    currentIndex === -1 ? allDescriptors : allDescriptors.slice(0, currentIndex);
+
   return (
     <div className="w-80 border-l border-border bg-card flex flex-col h-full">
       {/* Header */}
@@ -931,6 +960,8 @@ export function StepConfigPanel({ node, playbookId, onClose, onUpdate, nodes = [
             connectors={connectors}
             onConfigChange={handleConfigChange}
             getFieldError={getFieldError}
+            currentStepId={node.id}
+            previousSteps={previousSteps}
           />
         )}
 
@@ -941,6 +972,8 @@ export function StepConfigPanel({ node, playbookId, onClose, onUpdate, nodes = [
             onConfigChange={handleConfigChange}
             getFieldError={getFieldError}
             nodes={nodes}
+            currentStepId={node.id}
+            previousSteps={previousSteps}
           />
         )}
 
@@ -952,6 +985,8 @@ export function StepConfigPanel({ node, playbookId, onClose, onUpdate, nodes = [
             onConfigChange={handleConfigChange}
             onParameterChange={handleParameterChange}
             getFieldError={getFieldError}
+            currentStepId={node.id}
+            previousSteps={previousSteps}
           />
         )}
 
@@ -962,6 +997,8 @@ export function StepConfigPanel({ node, playbookId, onClose, onUpdate, nodes = [
             connectors={connectors}
             onConfigChange={handleConfigChange}
             getFieldError={getFieldError}
+            currentStepId={node.id}
+            previousSteps={previousSteps}
           />
         )}
 
@@ -1448,13 +1485,17 @@ function EnrichmentConfig({
   config,
   connectors,
   onConfigChange,
-  getFieldError
+  getFieldError,
+  currentStepId,
+  previousSteps = []
 }: {
   subtype?: string;
   config: Record<string, unknown>;
   connectors: any[];
   onConfigChange: (key: string, value: unknown) => void;
   getFieldError: (field: string) => string | undefined;
+  currentStepId?: string;
+  previousSteps?: PreviousStepDescriptor[];
 }) {
   // Get connector options based on subtype
   const connectorOptions = connectors.filter(c =>
@@ -1521,23 +1562,18 @@ function EnrichmentConfig({
       </div>
 
       <div className="space-y-2">
-        <FieldLabel label="Observable Field" tooltip="The field from trigger data to use as input" required />
-        <Select
-          value={(config.observable_field as string) || 'source_ip'}
-          onValueChange={(v) => onConfigChange('observable_field', v)}
-        >
-          <SelectTrigger className={getFieldError('observable_field') ? 'border-destructive' : ''}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="source_ip">Source IP</SelectItem>
-            <SelectItem value="destination_ip">Destination IP</SelectItem>
-            <SelectItem value="file_hash">File Hash</SelectItem>
-            <SelectItem value="domain">Domain</SelectItem>
-            <SelectItem value="url">URL</SelectItem>
-            <SelectItem value="username">Username</SelectItem>
-          </SelectContent>
-        </Select>
+        <ObservableFieldPicker
+          label="Observable Field"
+          required
+          value={(config.observable_field as string) || ''}
+          onChange={(v) => onConfigChange('observable_field', v)}
+          placeholder="Pick the field to enrich…"
+          fieldType="any"
+          currentStepId={currentStepId}
+          previousSteps={previousSteps}
+          error={getFieldError('observable_field')}
+          allowLiteral
+        />
       </div>
 
       <div className="space-y-2">
@@ -1597,177 +1633,41 @@ function getEnrichmentActions(subtype?: string): { value: string; label: string 
 // CONDITION CONFIG
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Common trigger data fields
-const TRIGGER_FIELDS = [
-  { value: 'trigger_data.severity', label: 'Severity' },
-  { value: 'trigger_data.rule_id', label: 'Rule ID' },
-  { value: 'trigger_data.rule_name', label: 'Rule Name' },
-  { value: 'trigger_data.source_ip', label: 'Source IP' },
-  { value: 'trigger_data.destination_ip', label: 'Destination IP' },
-  { value: 'trigger_data.username', label: 'Username' },
-  { value: 'trigger_data.agent_name', label: 'Agent Name' },
-  { value: 'trigger_data.failed_attempts', label: 'Failed Attempts' },
-  { value: 'trigger_data.event_count', label: 'Event Count' },
-];
-
-// Output fields produced by each connector type
-const CONNECTOR_OUTPUT_FIELDS: Record<string, { field: string; label: string }[]> = {
-  virustotal: [
-    { field: 'reputation_score', label: 'Reputation Score' },
-    { field: 'is_malicious', label: 'Is Malicious' },
-    { field: 'malicious_votes', label: 'Malicious Votes' },
-    { field: 'total_vendors', label: 'Total Vendors' },
-    { field: 'country', label: 'Country' },
-  ],
-  abuseipdb: [
-    { field: 'abuse_score', label: 'Abuse Score' },
-    { field: 'reputation_score', label: 'Reputation Score' },
-    { field: 'is_malicious', label: 'Is Malicious' },
-    { field: 'country_code', label: 'Country Code' },
-    { field: 'total_reports', label: 'Total Reports' },
-  ],
-  'alienvault-otx': [
-    { field: 'pulse_count', label: 'Pulse Count' },
-    { field: 'reputation', label: 'Reputation' },
-    { field: 'confidence', label: 'Confidence' },
-    { field: 'is_malicious', label: 'Is Malicious' },
-  ],
-  geoip: [
-    { field: 'country', label: 'Country' },
-    { field: 'city', label: 'City' },
-    { field: 'latitude', label: 'Latitude' },
-    { field: 'longitude', label: 'Longitude' },
-  ],
-  dns: [
-    { field: 'hostname', label: 'Hostname' },
-    { field: 'resolved', label: 'Resolved' },
-  ],
-};
-
-// Build flat COMMON_FIELDS list for backward compatibility (isCustomField check)
-const COMMON_FIELDS = [
-  ...TRIGGER_FIELDS.map(f => ({ ...f, category: 'trigger' })),
-];
-
-/**
- * Derive dynamic step output fields from upstream nodes.
- * Returns groups like: [{ stepLabel: "VirusTotal IP Lookup", stepId: "node-3", fields: [...] }]
- */
-function getDynamicStepFields(nodes: Node[]) {
-  const groups: { stepLabel: string; stepId: string; fields: { value: string; label: string }[] }[] = [];
-
-  for (const n of nodes) {
-    const data = n.data as PlaybookNodeData;
-    if (data.stepType !== 'enrichment' && data.stepType !== 'action') continue;
-
-    const cfg = (data.config || {}) as Record<string, unknown>;
-    const connectorId = (cfg.connector_id as string) || '';
-    const stepLabel = data.label || connectorId || n.id;
-
-    // Try to find output fields from CONNECTOR_OUTPUT_FIELDS map
-    const outputFields = CONNECTOR_OUTPUT_FIELDS[connectorId];
-    if (outputFields && outputFields.length > 0) {
-      groups.push({
-        stepLabel,
-        stepId: n.id,
-        fields: outputFields.map(of => ({
-          value: `steps.${n.id}.output.${of.field}`,
-          label: of.label,
-        })),
-      });
-    }
-  }
-
-  return groups;
-}
-
 function ConditionConfig({
   subtype,
   config,
   onConfigChange,
   getFieldError,
-  nodes = []
+  nodes: _nodes = [],
+  currentStepId,
+  previousSteps = []
 }: {
   subtype?: string;
   config: Record<string, unknown>;
   onConfigChange: (key: string, value: unknown) => void;
   getFieldError: (field: string) => string | undefined;
   nodes?: Node[];
+  currentStepId?: string;
+  previousSteps?: PreviousStepDescriptor[];
 }) {
-  const [useCustomField, setUseCustomField] = useState(false);
   const defaultField = getDefaultConditionField(subtype);
   const currentField = (config.field as string) || defaultField;
-
-  // Build dynamic step output fields from upstream nodes
-  const stepGroups = getDynamicStepFields(nodes);
-  const allDynamicValues = stepGroups.flatMap(g => g.fields.map(f => f.value));
-
-  // Check if current field is in any known field list
-  const isKnownField = COMMON_FIELDS.some(f => f.value === currentField) ||
-    allDynamicValues.includes(currentField);
-  const isCustomField = currentField && !isKnownField;
 
   return (
     <>
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <FieldLabel label="Field" tooltip="The field to evaluate (supports dot notation)" required />
-          <button
-            type="button"
-            className="text-xs text-primary hover:underline"
-            onClick={() => setUseCustomField(!useCustomField)}
-          >
-            {useCustomField || isCustomField ? 'Use preset' : 'Custom field'}
-          </button>
-        </div>
-
-        {(useCustomField || isCustomField) ? (
-          <Input
-            value={currentField}
-            onChange={(e) => onConfigChange('field', e.target.value)}
-            placeholder="e.g., steps.node-3.output.reputation_score"
-            className={getFieldError('field') ? 'border-destructive' : ''}
-          />
-        ) : (
-          <Select
-            value={currentField || '__select__'}
-            onValueChange={(v) => v !== '__select__' && onConfigChange('field', v)}
-          >
-            <SelectTrigger className={getFieldError('field') ? 'border-destructive' : ''}>
-              <SelectValue placeholder="Select a field..." />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__select__" disabled>Select a field...</SelectItem>
-
-              {/* Trigger Data fields */}
-              <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">Trigger Data</div>
-              {TRIGGER_FIELDS.map(f => (
-                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
-              ))}
-
-              {/* Dynamic step output fields */}
-              {stepGroups.map(group => (
-                <div key={group.stepId}>
-                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground mt-1 border-t border-border pt-2">
-                    {group.stepLabel} <span className="text-[10px] opacity-60">({group.stepId})</span>
-                  </div>
-                  {group.fields.map(f => (
-                    <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
-                  ))}
-                </div>
-              ))}
-
-              {/* Custom option at bottom */}
-              <div className="px-2 py-1 text-xs font-semibold text-muted-foreground mt-1 border-t border-border pt-2">Custom</div>
-              <SelectItem value="__custom__" onPointerUp={() => setUseCustomField(true)}>
-                Enter custom field path...
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        )}
-        {getFieldError('field') && (
-          <p className="text-xs text-destructive">{getFieldError('field')}</p>
-        )}
+        <ObservableFieldPicker
+          label="Field"
+          required
+          value={currentField}
+          onChange={(v) => onConfigChange('field', v)}
+          placeholder="Pick a field to evaluate…"
+          fieldType="any"
+          currentStepId={currentStepId}
+          previousSteps={previousSteps}
+          error={getFieldError('field')}
+          allowLiteral
+        />
       </div>
 
       <div className="space-y-2">
@@ -1866,7 +1766,9 @@ function ActionConfig({
   connectors,
   onConfigChange,
   onParameterChange,
-  getFieldError
+  getFieldError,
+  currentStepId,
+  previousSteps = []
 }: {
   subtype?: string;
   config: Record<string, unknown>;
@@ -1874,6 +1776,8 @@ function ActionConfig({
   onConfigChange: (key: string, value: unknown) => void;
   onParameterChange: (key: string, value: unknown) => void;
   getFieldError: (field: string) => string | undefined;
+  currentStepId?: string;
+  previousSteps?: PreviousStepDescriptor[];
 }) {
   const params = (config.parameters || {}) as Record<string, unknown>;
 
@@ -1905,6 +1809,7 @@ function ActionConfig({
             ) : (
               <>
                 <SelectItem value="cybersentinel_blocklist">CyberSentinel Blocklist</SelectItem>
+                <SelectItem value="cybersentinel_response">CyberSentinel Agent (Response)</SelectItem>
                 <SelectItem value="firewall">Firewall</SelectItem>
                 <SelectItem value="cybersentinel">CyberSentinel Agent</SelectItem>
                 <SelectItem value="active-directory">Active Directory</SelectItem>
@@ -1973,23 +1878,18 @@ function ActionConfig({
           </div>
 
           <div className="space-y-2">
-            <FieldLabel label="IP Address" tooltip="The resolved IP address or a {{variable}} template" required />
-            <Input
+            <ObservableFieldPicker
+              label="IP Address"
+              required
               value={(params.ip as string) || ''}
-              onChange={(e) => onParameterChange('ip', e.target.value)}
-              placeholder="{{trigger_data.source_ip}}"
-              className={getFieldError('parameters.ip') ? 'border-destructive' : ''}
+              onChange={(v) => onParameterChange('ip', v)}
+              placeholder="Pick the IP to block…"
+              fieldType="ip"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              error={getFieldError('parameters.ip')}
+              allowLiteral
             />
-            {params.ip && typeof params.ip === 'string' && !params.ip.includes('{{') && (
-              <p className="text-xs text-muted-foreground">
-                Preview: <code className="bg-muted px-1 rounded">{params.ip}</code>
-              </p>
-            )}
-            {params.ip && typeof params.ip === 'string' && params.ip.includes('{{') && (
-              <p className="text-xs text-muted-foreground">
-                Resolves at runtime from: <code className="bg-muted px-1 rounded">{params.ip}</code>
-              </p>
-            )}
           </div>
 
           <div className="space-y-2">
@@ -2026,12 +1926,17 @@ function ActionConfig({
       {(subtype === 'block_ip' || config.action === 'block_ip') && !(subtype === 'cybersentinel_block_ip' || config.action === 'cybersentinel_block_ip') && (
         <>
           <div className="space-y-2">
-            <FieldLabel label="IP Address" tooltip="Use {{trigger_data.source_ip}} for dynamic value" required />
-            <Input
+            <ObservableFieldPicker
+              label="IP Address"
+              required
               value={(params.ip as string) || '{{trigger_data.source_ip}}'}
-              onChange={(e) => onParameterChange('ip', e.target.value)}
-              placeholder="{{trigger_data.source_ip}}"
-              className={getFieldError('parameters.ip') ? 'border-destructive' : ''}
+              onChange={(v) => onParameterChange('ip', v)}
+              placeholder="Pick the IP to block…"
+              fieldType="ip"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              error={getFieldError('parameters.ip')}
+              allowLiteral
             />
           </div>
           <div className="space-y-2">
@@ -2056,42 +1961,121 @@ function ActionConfig({
         </>
       )}
 
+      {(subtype === 'isolate_host' || config.action === 'isolate_host') && (
+        <>
+          <div className="space-y-2">
+            <ObservableFieldPicker
+              label="Agent ID"
+              required
+              value={(params.agent_id as string) || '{{trigger_data.agent.id}}'}
+              onChange={(v) => onParameterChange('agent_id', v)}
+              placeholder="Pick the agent ID…"
+              fieldType="id"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              error={getFieldError('parameters.agent_id')}
+              allowLiteral
+            />
+          </div>
+          <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 mt-2">
+            <p className="text-xs text-amber-400 font-medium mb-1">Isolate Host</p>
+            <p className="text-xs text-muted-foreground">
+              Cuts off the endpoint from the network via CyberSentinel Agent. Only the
+              SOAR control plane remains reachable. During simulation, no isolation is applied.
+            </p>
+          </div>
+        </>
+      )}
+
       {(subtype === 'disable_user' || config.action === 'disable_user') && (
-        <div className="space-y-2">
-          <FieldLabel label="Username" tooltip="Use {{trigger_data.username}} for dynamic value" required />
-          <Input
-            value={(params.username as string) || '{{trigger_data.username}}'}
-            onChange={(e) => onParameterChange('username', e.target.value)}
-            placeholder="{{trigger_data.username}}"
-          />
-        </div>
+        <>
+          <div className="space-y-2">
+            <ObservableFieldPicker
+              label="Agent ID"
+              required
+              value={(params.agent_id as string) || '{{trigger_data.agent.id}}'}
+              onChange={(v) => onParameterChange('agent_id', v)}
+              placeholder="Pick the agent ID…"
+              fieldType="id"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              error={getFieldError('parameters.agent_id')}
+              allowLiteral
+            />
+          </div>
+          <div className="space-y-2">
+            <ObservableFieldPicker
+              label="Username"
+              required
+              value={(params.username as string) || '{{trigger_data.username}}'}
+              onChange={(v) => onParameterChange('username', v)}
+              placeholder="Pick the username…"
+              fieldType="string"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              error={getFieldError('parameters.username')}
+              allowLiteral
+            />
+          </div>
+          <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 mt-2">
+            <p className="text-xs text-amber-400 font-medium mb-1">Disable User Account</p>
+            <p className="text-xs text-muted-foreground">
+              Locks a user account on the target endpoint via CyberSentinel Agent. During
+              simulation, no account changes are made.
+            </p>
+          </div>
+        </>
       )}
 
       {(subtype === 'kill_process' || config.action === 'kill_process') && (
         <>
           <div className="space-y-2">
-            <FieldLabel label="Agent ID" tooltip="The agent to execute the action on" />
-            <Input
-              value={(params.agent_id as string) || '{{trigger_data.agent_id}}'}
-              onChange={(e) => onParameterChange('agent_id', e.target.value)}
-              placeholder="{{trigger_data.agent_id}}"
+            <ObservableFieldPicker
+              label="Agent ID"
+              required
+              value={(params.agent_id as string) || '{{trigger_data.agent.id}}'}
+              onChange={(v) => onParameterChange('agent_id', v)}
+              placeholder="Pick the agent ID…"
+              fieldType="id"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              error={getFieldError('parameters.agent_id')}
+              allowLiteral
             />
           </div>
           <div className="space-y-2">
-            <FieldLabel label="PID" tooltip="Process ID to terminate" />
-            <Input
+            <ObservableFieldPicker
+              label="PID"
               value={(params.pid as string) || ''}
-              onChange={(e) => onParameterChange('pid', e.target.value)}
-              placeholder="Enter PID..."
+              onChange={(v) => onParameterChange('pid', v)}
+              placeholder="Pick or type a PID…"
+              fieldType="number"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              allowLiteral
             />
           </div>
           <div className="space-y-2">
-            <FieldLabel label="Process Name" tooltip="Or specify process name" />
-            <Input
+            <ObservableFieldPicker
+              label="Process Name"
               value={(params.process_name as string) || ''}
-              onChange={(e) => onParameterChange('process_name', e.target.value)}
-              placeholder="e.g., malware.exe"
+              onChange={(v) => onParameterChange('process_name', v)}
+              placeholder="Pick or type a process name…"
+              fieldType="string"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              allowLiteral
             />
+          </div>
+          {getFieldError('parameters') && (
+            <p className="text-xs text-destructive">{getFieldError('parameters')}</p>
+          )}
+          <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 mt-2">
+            <p className="text-xs text-amber-400 font-medium mb-1">Kill Process</p>
+            <p className="text-xs text-muted-foreground">
+              Terminates a malicious process on the target endpoint via CyberSentinel Agent.
+              Provide either a PID or a process name. During simulation, no process is killed.
+            </p>
           </div>
         </>
       )}
@@ -2099,11 +2083,16 @@ function ActionConfig({
       {(subtype === 'add_watchlist' || config.action === 'add_ip') && (
         <>
           <div className="space-y-2">
-            <FieldLabel label="IP Address" required />
-            <Input
+            <ObservableFieldPicker
+              label="IP Address"
+              required
               value={(params.ip as string) || '{{trigger_data.source_ip}}'}
-              onChange={(e) => onParameterChange('ip', e.target.value)}
-              placeholder="{{trigger_data.source_ip}}"
+              onChange={(v) => onParameterChange('ip', v)}
+              placeholder="Pick an IP…"
+              fieldType="ip"
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              allowLiteral
             />
           </div>
           <div className="space-y-2">
@@ -2190,14 +2179,44 @@ function NotificationConfig({
   config,
   connectors,
   onConfigChange,
-  getFieldError
+  getFieldError,
+  currentStepId,
+  previousSteps = []
 }: {
   subtype?: string;
   config: Record<string, unknown>;
   connectors: any[];
   onConfigChange: (key: string, value: unknown) => void;
   getFieldError: (field: string) => string | undefined;
+  currentStepId?: string;
+  previousSteps?: PreviousStepDescriptor[];
 }) {
+  const subjectRef = useRef<HTMLInputElement>(null);
+  const messageRef = useRef<HTMLTextAreaElement>(null);
+
+  // Insert `template` at the current cursor position in the given element,
+  // falling back to appending. Then commit the new value back to config.
+  const insertAt = (
+    key: string,
+    current: string,
+    el: HTMLInputElement | HTMLTextAreaElement | null,
+    template: string,
+  ) => {
+    if (el && typeof el.selectionStart === 'number') {
+      const start = el.selectionStart;
+      const end = el.selectionEnd ?? start;
+      const next = current.slice(0, start) + template + current.slice(end);
+      onConfigChange(key, next);
+      // Restore caret after the inserted template
+      requestAnimationFrame(() => {
+        el.focus();
+        const caret = start + template.length;
+        el.setSelectionRange(caret, caret);
+      });
+    } else {
+      onConfigChange(key, (current || '') + template);
+    }
+  };
   const connectorOptions = connectors.filter(c =>
     ['email', 'smtp', 'slack', 'notification', 'webhook'].some(t =>
       c.type?.toLowerCase().includes(t) || c.name?.toLowerCase().includes(t)
@@ -2273,21 +2292,41 @@ function NotificationConfig({
 
       {(config.channel === 'email' || subtype === 'email_smtp') && (
         <div className="space-y-2">
-          <FieldLabel label="Subject" />
+          <div className="flex items-center justify-between">
+            <FieldLabel label="Subject" />
+            <InsertFieldButton
+              currentStepId={currentStepId}
+              previousSteps={previousSteps}
+              onInsert={(tpl) =>
+                insertAt('subject', (config.subject as string) || '', subjectRef.current, tpl)
+              }
+            />
+          </div>
           <Input
+            ref={subjectRef}
             value={(config.subject as string) || ''}
             onChange={(e) => onConfigChange('subject', e.target.value)}
-            placeholder="Security Alert: {{trigger_data.rule_name}}"
+            placeholder="Security Alert: {{trigger_data.rule.name}}"
           />
         </div>
       )}
 
       <div className="space-y-2">
-        <FieldLabel label="Message Template" tooltip="Use {{field}} for dynamic values" />
+        <div className="flex items-center justify-between">
+          <FieldLabel label="Message Template" tooltip="Use {{field}} for dynamic values" />
+          <InsertFieldButton
+            currentStepId={currentStepId}
+            previousSteps={previousSteps}
+            onInsert={(tpl) =>
+              insertAt('message', (config.message as string) || '', messageRef.current, tpl)
+            }
+          />
+        </div>
         <Textarea
+          ref={messageRef}
           value={(config.message as string) || ''}
           onChange={(e) => onConfigChange('message', e.target.value)}
-          placeholder="Alert: {{trigger_data.rule_name}}&#10;Severity: {{trigger_data.severity}}&#10;Source IP: {{trigger_data.source_ip}}"
+          placeholder="Alert: {{trigger_data.rule.name}}&#10;Severity: {{trigger_data.severity}}&#10;Source IP: {{trigger_data.source_ip}}"
           rows={5}
           className="font-mono text-xs"
         />

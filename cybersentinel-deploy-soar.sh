@@ -3,7 +3,7 @@
 # CyberSentinel SOAR v3.0 — Deployment Script
 # ══════════════════════════════════════════════════════════════════════════════
 # Pulls Docker images from GHCR and deploys the full SOAR stack.
-# Automatically finds open ports if defaults (3000/3001) are busy.
+# Automatically finds open ports if defaults (3022/3024) are busy.
 #
 # Usage:
 #   chmod +x cybersentinel-deploy-soar.sh
@@ -33,8 +33,8 @@ IMAGES=(
 DEPLOY_DIR="/opt/cybersentinel-soar"
 
 # Port defaults
-FRONTEND_PORT=3000
-BACKEND_PORT=3001
+FRONTEND_PORT=3022
+BACKEND_PORT=3024
 
 # ── Helper Functions ─────────────────────────────────────────────────────────
 
@@ -173,6 +173,9 @@ step_check_env() {
     # Generate a random SOAR API key
     SOAR_API_KEY=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 
+    # Generate a random SSO secret (for SIEM → SOAR token exchange)
+    SOAR_SSO_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
+
     cat > "$ENV_FILE" << ENVEOF
 # ══════════════════════════════════════════════════════════════
 # CyberSentinel SOAR v3.0 — Backend Environment Configuration
@@ -224,7 +227,10 @@ FIREWALL_API_KEY=
 WEBHOOK_TRUSTED_IPS=127.0.0.1,::1,::ffff:127.0.0.1
 
 # ── CORS ──
-CORS_ORIGIN=http://localhost:3000
+CORS_ORIGIN=http://localhost:3022
+
+# ── SSO (SIEM → SOAR token exchange) ──
+SOAR_SSO_SECRET=${SOAR_SSO_SECRET}
 
 # ── Legacy (disabled) ──
 ENABLE_ALERT_STORAGE=false
@@ -284,23 +290,23 @@ step_find_ports() {
   separator
   log_info "Step 4/8 — Checking port availability"
 
-  # ── Frontend port (range: 3000-3010) ──
-  if is_port_available 3000; then
-    FRONTEND_PORT=3000
-    log_ok "Frontend port 3000 is available"
+  # ── Frontend port (default: 3022) ──
+  if is_port_available 3022; then
+    FRONTEND_PORT=3022
+    log_ok "Frontend port 3022 is available"
   else
-    log_warn "Port 3000 is in use — scanning range 3000-3010..."
-    FRONTEND_PORT=$(find_available_port 3000 3010 "frontend")
+    log_warn "Port 3022 is in use — scanning range 3022-3032..."
+    FRONTEND_PORT=$(find_available_port 3022 3032 "frontend")
     log_ok "Frontend will use port ${BOLD}${FRONTEND_PORT}${NC}"
   fi
 
-  # ── Backend port (range: 3011-3020) ──
-  if is_port_available 3001; then
-    BACKEND_PORT=3001
-    log_ok "Backend port 3001 is available"
+  # ── Backend port (default: 3024) ──
+  if is_port_available 3024; then
+    BACKEND_PORT=3024
+    log_ok "Backend port 3024 is available"
   else
-    log_warn "Port 3001 is in use — scanning range 3011-3020..."
-    BACKEND_PORT=$(find_available_port 3011 3020 "backend")
+    log_warn "Port 3024 is in use — scanning range 3024-3034..."
+    BACKEND_PORT=$(find_available_port 3024 3034 "backend")
     log_ok "Backend will use port ${BOLD}${BACKEND_PORT}${NC}"
   fi
 
@@ -439,7 +445,7 @@ step_deploy() {
   ${COMPOSE_CMD} down --remove-orphans 2>/dev/null || true
 
   # Rebuild frontend if backend port changed (bakes VITE_BACKEND_PORT into JS bundle)
-  if [ "$BACKEND_PORT" != "3001" ]; then
+  if [ "$BACKEND_PORT" != "3024" ]; then
     log_info "Backend port changed to ${BACKEND_PORT} — rebuilding frontend image..."
     VITE_BACKEND_PORT="${BACKEND_PORT}" ${COMPOSE_CMD} build soar-frontend
   fi

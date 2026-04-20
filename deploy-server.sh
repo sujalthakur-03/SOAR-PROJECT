@@ -70,19 +70,19 @@ fi
 separator
 log_info "Step 3/6 — Firewall configuration"
 
-read -rp "Configure firewall rules for ports 3000, 3001? (y/n): " FW_CHOICE
+read -rp "Configure firewall rules for ports 3022, 3024? (y/n): " FW_CHOICE
 if [[ "${FW_CHOICE}" =~ ^[Yy]$ ]]; then
     if command -v ufw &>/dev/null; then
-        sudo ufw allow 3000/tcp comment 'CyberSentinel Frontend' 2>/dev/null || true
-        sudo ufw allow 3001/tcp comment 'CyberSentinel Backend API' 2>/dev/null || true
-        log_ok "UFW rules added for ports 3000, 3001"
+        sudo ufw allow 3022/tcp comment 'CyberSentinel Frontend' 2>/dev/null || true
+        sudo ufw allow 3024/tcp comment 'CyberSentinel Backend API' 2>/dev/null || true
+        log_ok "UFW rules added for ports 3022, 3024"
     elif command -v firewall-cmd &>/dev/null; then
-        sudo firewall-cmd --permanent --add-port=3000/tcp 2>/dev/null || true
-        sudo firewall-cmd --permanent --add-port=3001/tcp 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-port=3022/tcp 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-port=3024/tcp 2>/dev/null || true
         sudo firewall-cmd --reload 2>/dev/null || true
-        log_ok "firewalld rules added for ports 3000, 3001"
+        log_ok "firewalld rules added for ports 3022, 3024"
     else
-        log_warn "No firewall detected (ufw/firewalld). Manually open ports 3000, 3001 if needed."
+        log_warn "No firewall detected (ufw/firewalld). Manually open ports 3022, 3024 if needed."
     fi
 else
     log_info "Skipping firewall configuration"
@@ -99,8 +99,8 @@ if [ ! -f backend/.env ]; then
     JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
     SOAR_API_KEY=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 
-    CORS_ORIGINS="http://localhost:3000"
-    [ -n "$PRIMARY_IP" ] && [ "$PRIMARY_IP" != "unknown" ] && CORS_ORIGINS="${CORS_ORIGINS},http://${PRIMARY_IP}:3000"
+    CORS_ORIGINS="http://localhost:3022"
+    [ -n "$PRIMARY_IP" ] && [ "$PRIMARY_IP" != "unknown" ] && CORS_ORIGINS="${CORS_ORIGINS},http://${PRIMARY_IP}:3022"
 
     cat > backend/.env << ENVEOF
 # CyberSentinel SOAR v3.0 — Backend Environment
@@ -133,6 +133,9 @@ SMTP_PASS=
 CYBERSENTINEL_CONTROL_PLANE_URL=
 CYBERSENTINEL_CONTROL_PLANE_USER=
 CYBERSENTINEL_CONTROL_PLANE_PASSWORD=
+
+# SSO (SIEM → SOAR token exchange)
+SOAR_SSO_SECRET=
 
 ENABLE_ALERT_STORAGE=false
 ENABLE_LEGACY_PULL_INGESTION=false
@@ -202,8 +205,8 @@ echo ""
 FRONTEND_OK=false
 BACKEND_OK=false
 
-curl -sf http://localhost:3000 > /dev/null 2>&1 && FRONTEND_OK=true
-curl -sf http://localhost:3001/health > /dev/null 2>&1 && BACKEND_OK=true
+curl -sf http://localhost:3022 > /dev/null 2>&1 && FRONTEND_OK=true
+curl -sf http://localhost:3024/health > /dev/null 2>&1 && BACKEND_OK=true
 
 $FRONTEND_OK && log_ok "Frontend: accessible" || log_warn "Frontend: not responding"
 $BACKEND_OK && log_ok "Backend: healthy" || log_warn "Backend: not responding"
@@ -216,9 +219,9 @@ echo -e "${GREEN}${BOLD}║  CyberSentinel SOAR v3.0 — Deployment Complete    
 echo -e "${GREEN}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${BOLD}Access URLs:${NC}"
-echo -e "  Local:    http://localhost:3000"
-echo -e "  Network:  http://${PRIMARY_IP}:3000"
-[ -n "$PUBLIC_IP" ] && echo -e "  Public:   http://${PUBLIC_IP}:3000"
+echo -e "  Local:    http://localhost:3022"
+echo -e "  Network:  http://${PRIMARY_IP}:3022"
+[ -n "$PUBLIC_IP" ] && echo -e "  Public:   http://${PUBLIC_IP}:3022"
 echo ""
 echo -e "${BOLD}Default login:${NC} soaradmin / CyberSentinelSOAR@2026"
 echo ""

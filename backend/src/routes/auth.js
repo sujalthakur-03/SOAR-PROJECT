@@ -3,9 +3,11 @@
  */
 
 import express from 'express';
-import { authenticateUser, verifyToken, getUserById, createUser } from '../services/auth-service.js';
+import jwt from 'jsonwebtoken';
+import { authenticateUser, verifyToken, getUserById, createUser, generateToken } from '../services/auth-service.js';
 import authMiddleware from '../middleware/auth.js';
 import { requireRole } from '../middleware/auth.js';
+import User from '../models/user.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
@@ -146,6 +148,89 @@ router.post('/logout', (req, res) => {
   // In JWT-based auth, logout is handled client-side by removing the token
   // This endpoint is here for consistency and future session management
   res.json({ success: true, message: 'Logged out successfully' });
+});
+
+/**
+ * POST /auth/sso/exchange
+ * Exchange a SIEM-issued SSO token for a SOAR JWT
+ */
+router.post('/sso/exchange', async (req, res) => {
+  try {
+    // 1. Extract token from body
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token is required' });
+
+    // 2. Verify with SOAR_SSO_SECRET
+    const SSO_SECRET = process.env.SOAR_SSO_SECRET;
+    if (!SSO_SECRET) return res.status(500).json({ error: 'SSO not configured' });
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, SSO_SECRET);
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ error: 'SSO token expired' });
+      }
+      return res.status(401).json({ error: 'Invalid SSO token' });
+    }
+
+    // 3. Validate purpose and issuer
+    if (decoded.purpose !== 'sso_exchange') {
+      return res.status(401).json({ error: 'Invalid token purpose' });
+    }
+    if (decoded.iss !== 'cybersentinel-siem') {
+      return res.status(401).json({ error: 'Invalid token issuer' });
+    }
+
+    // 4. Derive email from username
+    let email = decoded.email;
+    if (!email && decoded.username) {
+      email = decoded.username.includes('@') ? decoded.username : `${decoded.username}@cybersentinel.local`;
+    }
+    if (!email) {
+      return res.status(400).json({ error: 'No email or username in SSO token' });
+    }
+
+    // 5. Find user in MongoDB
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found. Register first via SIEM admin.' });
+    }
+
+    // 6. Check account status
+    if (user.isLocked()) {
+      return res.status(403).json({ error: 'Account is locked' });
+    }
+    if (user.status === 'inactive') {
+      return res.status(403).json({ error: 'Account is inactive' });
+    }
+
+    // 7. Update last login
+    await user.updateLastLogin();
+
+    // 8. Generate SOAR JWT (same as normal login)
+    const soarToken = generateToken(user);
+
+    // 9. Return EXACT same format as /auth/login
+    const userData = {
+      id: user._id.toString(),
+      username: user.email.split('@')[0],
+      email: user.email,
+      fullName: user.full_name,
+      role: user.role,
+    };
+
+    logger.info(`SSO login successful: ${email} (from SIEM)`);
+
+    res.json({
+      success: true,
+      token: soarToken,
+      user: userData,
+    });
+  } catch (error) {
+    logger.error('SSO exchange error:', error);
+    res.status(500).json({ error: 'SSO exchange failed' });
+  }
 });
 
 /**

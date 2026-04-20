@@ -275,10 +275,10 @@ step_redeploy() {
   cd "${DEPLOY_DIR}"
 
   # Preserve current port assignments from running containers
-  FRONTEND_PORT=$(docker port soar-frontend 3000 2>/dev/null | cut -d: -f2 || echo "3000")
-  BACKEND_PORT=$(docker port soar-backend 3001 2>/dev/null | cut -d: -f2 || echo "3001")
-  [ -z "$FRONTEND_PORT" ] && FRONTEND_PORT=3000
-  [ -z "$BACKEND_PORT" ] && BACKEND_PORT=3001
+  FRONTEND_PORT=$(docker port soar-frontend 3000 2>/dev/null | cut -d: -f2 || echo "3022")
+  BACKEND_PORT=$(docker port soar-backend 3001 2>/dev/null | cut -d: -f2 || echo "3024")
+  [ -z "$FRONTEND_PORT" ] && FRONTEND_PORT=3022
+  [ -z "$BACKEND_PORT" ] && BACKEND_PORT=3024
 
   export FRONTEND_PORT BACKEND_PORT
 
