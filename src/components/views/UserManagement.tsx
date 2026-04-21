@@ -202,18 +202,18 @@ export function UserManagement() {
     if (!selectedUser) return;
     const currentUser = JSON.parse(localStorage.getItem('cybersentinel_auth_user') || '{}');
     if (selectedUser.id === currentUser.id) {
-      toast.error('You cannot deactivate your own account');
+      toast.error('You cannot delete your own account');
       setDeactivateDialogOpen(false);
       setSelectedUser(null);
       return;
     }
     try {
       await deactivateUser.mutateAsync(selectedUser.id);
-      toast.success(`User "${selectedUser.username}" deactivated`);
+      toast.success(`User "${selectedUser.username}" deleted`);
       setDeactivateDialogOpen(false);
       setSelectedUser(null);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to deactivate user');
+      toast.error(err.message || 'Failed to delete user');
     }
   };
 
@@ -433,8 +433,7 @@ export function UserManagement() {
                             variant="ghost"
                             size="icon"
                             onClick={() => openDeactivateDialog(user)}
-                            title="Deactivate user"
-                            disabled={user.status === 'inactive'}
+                            title="Delete user"
                           >
                             <UserX className="h-4 w-4 text-destructive" />
                           </Button>
@@ -599,15 +598,15 @@ export function UserManagement() {
       </Dialog>
 
       {/* ================================================================== */}
-      {/* DEACTIVATE CONFIRMATION DIALOG                                     */}
+      {/* DELETE CONFIRMATION DIALOG                                         */}
       {/* ================================================================== */}
       <AlertDialog open={deactivateDialogOpen} onOpenChange={setDeactivateDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Deactivate User</AlertDialogTitle>
+            <AlertDialogTitle>Delete User</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to deactivate <span className="font-semibold">{selectedUser?.username}</span>?
-              This will set their status to inactive and they will no longer be able to log in.
+              Are you sure you want to permanently delete <span className="font-semibold">{selectedUser?.username}</span>?
+              This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -616,7 +615,7 @@ export function UserManagement() {
               onClick={handleDeactivateUser}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deactivateUser.isPending ? 'Deactivating...' : 'Deactivate'}
+              {deactivateUser.isPending ? 'Deleting...' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

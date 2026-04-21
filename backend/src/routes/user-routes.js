@@ -126,7 +126,7 @@ router.put('/users/:id', requireRole('admin'), async (req, res) => {
 
 /**
  * DELETE /api/users/:id
- * Deactivate user (admin only) - sets status to 'inactive', does NOT delete
+ * Permanently delete a user (admin only)
  */
 router.delete('/users/:id', requireRole('admin'), async (req, res) => {
   try {
@@ -135,25 +135,24 @@ router.delete('/users/:id', requireRole('admin'), async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Prevent self-deactivation
+    // Prevent self-deletion
     if (user._id.toString() === req.user.userId) {
-      return res.status(400).json({ error: 'Cannot deactivate your own account' });
+      return res.status(400).json({ error: 'Cannot delete your own account' });
     }
 
-    user.status = 'inactive';
-    await user.save();
+    const deletedEmail = user.email;
+    await User.deleteOne({ _id: user._id });
 
-    logger.info(`User ${user.email} deactivated by ${req.user.email}`);
+    logger.info(`User ${deletedEmail} deleted by ${req.user.email}`);
 
     res.json({
       success: true,
-      message: `User ${user.email} has been deactivated`,
-      id: user._id.toString(),
-      status: 'inactive',
+      message: `User ${deletedEmail} has been deleted`,
+      id: req.params.id,
     });
   } catch (error) {
-    logger.error('Error deactivating user:', error);
-    res.status(500).json({ error: 'Failed to deactivate user', message: error.message });
+    logger.error('Error deleting user:', error);
+    res.status(500).json({ error: 'Failed to delete user', message: error.message });
   }
 });
 
