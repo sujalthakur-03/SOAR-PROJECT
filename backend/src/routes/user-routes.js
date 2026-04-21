@@ -163,7 +163,7 @@ router.delete('/users/:id', requireRole('admin'), async (req, res) => {
  */
 router.post('/users/:id/reset-password', requireRole('admin'), async (req, res) => {
   try {
-    const password = req.body.password?.trim();
+    const password = (req.body.password || req.body.newPassword)?.trim();
     if (!password || password.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters (excluding whitespace)' });
     }

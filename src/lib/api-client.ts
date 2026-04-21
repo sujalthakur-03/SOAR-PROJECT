@@ -900,7 +900,7 @@ class APIClient {
   async resetUserPassword(id: string, newPassword: string) {
     return this.request<any>(`/users/${id}/reset-password`, {
       method: 'POST',
-      body: JSON.stringify({ newPassword }),
+      body: JSON.stringify({ password: newPassword }),
     });
   }
 }
