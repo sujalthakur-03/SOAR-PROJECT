@@ -41,6 +41,61 @@ router.get('/users', requireRole('admin'), async (req, res) => {
 });
 
 /**
+ * GET /api/users/check?username=<username>
+ * Check if a user exists and is usable for SSO (admin only)
+ *
+ * Used by the SIEM to keep its local "soarRegistered" flag in sync
+ * with the actual SOAR user database.
+ *
+ * Accepts either a bare username ("csadmin") or a full email
+ * ("csadmin@cybersentinel.local"). Bare usernames are mapped to
+ * "<username>@cybersentinel.local" the same way authenticateUser does.
+ *
+ * Response:
+ *   200 { exists: true, status, role, usable_for_sso }
+ *   200 { exists: false }
+ *   400 if username param is missing
+ *
+ * Note: Always returns 200 (no 404) so the SIEM can rely on a single
+ * predictable response shape without try/catch handling.
+ */
+router.get('/users/check', requireRole('admin'), async (req, res) => {
+  try {
+    const username = (req.query.username || '').toString().trim();
+    if (!username) {
+      return res.status(400).json({ error: 'username query parameter is required' });
+    }
+
+    const email = username.includes('@')
+      ? username.toLowerCase()
+      : `${username.toLowerCase()}@cybersentinel.local`;
+
+    const user = await User.findOne({ email })
+      .select('status role')
+      .lean();
+
+    if (!user) {
+      logger.info(`[UserCheck] ${email} → not found (requested by ${req.user.email})`);
+      return res.json({ exists: false });
+    }
+
+    const usable_for_sso = user.status === 'active';
+
+    logger.info(`[UserCheck] ${email} → exists=true status=${user.status} usable=${usable_for_sso}`);
+
+    res.json({
+      exists: true,
+      status: user.status,
+      role: user.role,
+      usable_for_sso,
+    });
+  } catch (error) {
+    logger.error('Error checking user existence:', error);
+    res.status(500).json({ error: 'Failed to check user', message: error.message });
+  }
+});
+
+/**
  * GET /api/users/:id
  * Get a single user by ID (admin only)
  */

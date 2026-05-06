@@ -4,29 +4,34 @@
  * ══════════════════════════════════════════════════════════════════════════════
  *
  * Executes endpoint response actions (host isolation, process termination,
- * user account disabling) via the CyberSentinel Control Plane Active Response
- * subsystem.
+ * user account disabling) via the CyberSentinel Manager Active Response API.
  *
  * CONNECTOR TYPE: cybersentinel_response
  * ACTIONS:
- *   - isolate_host   : Cut off endpoint from network (Control Plane remains reachable)
+ *   - isolate_host   : Cut off endpoint from network (manager remains reachable)
  *   - kill_process   : Terminate a process by name or PID on the target agent
  *   - disable_user   : Lock a user account on the target endpoint
  *
  * ARCHITECTURE NOTES:
- * - Internally communicates with the CyberSentinel Control Plane REST API
- *   using the PUT /active-response endpoint.
- * - Active Response custom commands are registered on the Control Plane with
- *   the trailing "0" suffix ("isolate-host0", "kill-process0", "disable-user0").
- * - Shares token caching with the blocklist connector pattern (10-min TTL).
- * - Simulation mode returns mock success without calling the Control Plane.
+ * - Communicates with the CyberSentinel manager (rebranded Wazuh) REST API
+ *   using PUT /active-response.
+ * - Active Response uses paired commands per Wazuh idiom:
+ *     Linux:   soar-isolate-host0      / soar-kill-process0      / soar-disable-user0
+ *     Windows: win_soar-isolate-host0  / win_soar-kill-process0  / win_soar-disable-user0
+ *   Before each dispatch, the connector queries GET /agents to determine the
+ *   agent OS family and picks the matching command name.
+ * - Manager IP for the isolate_host whitelist is configured ONCE in the
+ *   manager's ossec.conf <extra_args>. The connector does NOT pass the
+ *   manager IP — Wazuh propagates it via the AR JSON payload.
+ * - Token cache shared with blocklist connector pattern (10-min TTL).
+ * - Simulation mode returns mock success without calling the manager.
  *
  * ENVIRONMENT VARIABLES:
- *   CYBERSENTINEL_CONTROL_PLANE_URL      - Control Plane API base URL
- *   CYBERSENTINEL_CONTROL_PLANE_USER     - API username
+ *   CYBERSENTINEL_CONTROL_PLANE_URL      - Manager API base URL (https://host:55000)
+ *   CYBERSENTINEL_CONTROL_PLANE_USER     - API username (default: wazuh-wui)
  *   CYBERSENTINEL_CONTROL_PLANE_PASSWORD - API password
  *
- * VERSION: 1.0.0
+ * VERSION: 1.1.0
  * AUTHOR: CyberSentinel SOAR Team
  * ══════════════════════════════════════════════════════════════════════════════
  */
@@ -46,7 +51,7 @@ function getControlPlaneConfig() {
       || '',
     user: process.env.CYBERSENTINEL_CONTROL_PLANE_USER
       || process.env.CYBERSENTINEL_API_USERNAME
-      || 'admin',
+      || 'wazuh-wui',
     password: process.env.CYBERSENTINEL_CONTROL_PLANE_PASSWORD
       || process.env.CYBERSENTINEL_API_PASSWORD
       || '',
@@ -56,8 +61,21 @@ function getControlPlaneConfig() {
 const httpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const API_TIMEOUT_MS = 30000;
 
+// Paired command names — Linux base, win_ prefix for Windows
+const AR_COMMANDS = {
+  isolate_host: 'soar-isolate-host0',
+  kill_process: 'soar-kill-process0',
+  disable_user: 'soar-disable-user0',
+};
+
+function commandForOS(action, os) {
+  const base = AR_COMMANDS[action];
+  if (!base) throw new Error(`No AR command mapping for action '${action}'`);
+  return os === 'windows' ? `win_${base}` : base;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// AUTH TOKEN CACHE (mirrors the blocklist connector pattern)
+// AUTH TOKEN CACHE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 let cachedToken = null;
@@ -69,7 +87,6 @@ async function authenticate(config) {
   if (cachedToken && Date.now() < cachedTokenExpiry) {
     return cachedToken;
   }
-
   if (tokenRefreshPromise) {
     return tokenRefreshPromise;
   }
@@ -103,29 +120,69 @@ async function authenticate(config) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// AGENT OS LOOKUP
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Look up the OS family of an agent so we can pick the right paired
+ * AR command name (linux → soar-X0, windows → win_soar-X0).
+ *
+ * GET /agents?agents_list=<id>&select=os.platform
+ *
+ * Returns 'windows' or 'linux'. macOS/BSD/etc. fall through to 'linux'
+ * since their AR scripts share the POSIX base.
+ */
+async function getAgentOS(agentId, token, config) {
+  const response = await axios.get(
+    `${config.url}/agents?agents_list=${encodeURIComponent(agentId)}&select=os.platform`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      httpsAgent,
+      timeout: API_TIMEOUT_MS,
+    }
+  );
+
+  const items = response.data?.data?.affected_items || [];
+  if (!items.length) {
+    throw Object.assign(
+      new Error(`Agent '${agentId}' not found on manager`),
+      { code: 'AGENT_NOT_FOUND', retryable: false }
+    );
+  }
+
+  const platform = String(items[0]?.os?.platform || '').toLowerCase();
+  if (platform === 'windows') return 'windows';
+  return 'linux';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ACTIVE RESPONSE DISPATCH
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Send an Active Response command to the Control Plane.
+ * Send an Active Response command to the manager.
  *
- * PUT /active-response
- * Body: { command, arguments, alert, agents_list }
+ * PUT /active-response?agents_list=<id>
+ * Body: { command, arguments, alert }
  *
- * Custom Active Response commands are registered on the Control Plane with
- * the trailing "0" suffix by convention.
+ * The manager bundles its ossec.conf <extra_args> with the API `arguments`
+ * and forwards the combined list to the agent script as parameters.extra_args.
  */
-async function sendActiveResponse({ command, args, agentId }) {
+async function dispatchAR({ action, args, agentId }) {
   const config = getControlPlaneConfig();
 
   if (!config.url) {
     throw Object.assign(
-      new Error('CyberSentinel Control Plane is not configured. Set CYBERSENTINEL_CONTROL_PLANE_URL.'),
+      new Error('CyberSentinel manager is not configured. Set CYBERSENTINEL_CONTROL_PLANE_URL.'),
       { code: 'SERVICE_UNAVAILABLE', retryable: false }
     );
   }
 
   const token = await authenticate(config);
+  const os = await getAgentOS(agentId, token, config);
+  const command = commandForOS(action, os);
+
+  logger.info(`[CyberSentinelResponse] Dispatch ${action} → ${command} on agent ${agentId} (os=${os})`);
 
   const body = {
     command,
@@ -146,7 +203,7 @@ async function sendActiveResponse({ command, args, agentId }) {
     }
   );
 
-  return response.data;
+  return { os, command, data: response.data };
 }
 
 /**
@@ -155,44 +212,44 @@ async function sendActiveResponse({ command, args, agentId }) {
 function classifyError(error, operation) {
   const status = error.response?.status;
 
+  if (error.code && typeof error.retryable === 'boolean') {
+    return error;
+  }
   if (status === 401 || status === 403) {
     return Object.assign(
-      new Error('CyberSentinel Control Plane authentication failed. Check credentials.'),
+      new Error('CyberSentinel manager authentication failed. Check credentials.'),
       { code: 'AUTH_FAILED', retryable: false }
     );
   }
   if (status === 404) {
     return Object.assign(
-      new Error('CyberSentinel Control Plane endpoint not found. Check the configured URL.'),
+      new Error('CyberSentinel manager endpoint not found. Check the configured URL.'),
       { code: 'NOT_FOUND', retryable: false }
     );
   }
   if (status === 429) {
     return Object.assign(
-      new Error('CyberSentinel Control Plane rate limit reached. Try again shortly.'),
+      new Error('CyberSentinel manager rate limit reached. Try again shortly.'),
       { code: 'RATE_LIMITED', retryable: true }
     );
   }
   if (status >= 500) {
     return Object.assign(
-      new Error('CyberSentinel Control Plane is temporarily unavailable.'),
+      new Error('CyberSentinel manager is temporarily unavailable.'),
       { code: 'SERVICE_UNAVAILABLE', retryable: true }
     );
   }
   if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
     return Object.assign(
-      new Error('Cannot reach CyberSentinel Control Plane. Check network and URL configuration.'),
+      new Error('Cannot reach CyberSentinel manager. Check network and URL configuration.'),
       { code: 'CONNECTION_FAILED', retryable: true }
     );
   }
   if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT') {
     return Object.assign(
-      new Error('CyberSentinel Control Plane request timed out.'),
+      new Error('CyberSentinel manager request timed out.'),
       { code: 'CONNECTOR_TIMEOUT', retryable: true }
     );
-  }
-  if (error.code && typeof error.retryable === 'boolean') {
-    return error;
   }
   return Object.assign(
     new Error(`CyberSentinel ${operation} failed: ${error.message}`),
@@ -204,9 +261,6 @@ function classifyError(error, operation) {
 // CORE ACTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Isolate an endpoint from the network via the CyberSentinel Agent.
- */
 export async function isolate_host({ agent_id, _simulate }) {
   const timestamp = new Date().toISOString();
 
@@ -227,29 +281,29 @@ export async function isolate_host({ agent_id, _simulate }) {
       agent_id: cleanAgentId,
       action: 'isolate_host',
       timestamp,
-      enforced_by: 'CyberSentinel Control Plane',
+      enforced_by: 'CyberSentinel Manager',
       _simulated: true,
     };
   }
 
-  logger.info(`[CyberSentinelResponse] Isolating host ${cleanAgentId} via Control Plane`);
-
   try {
-    const response = await sendActiveResponse({
-      command: 'isolate-host0',
-      args: [],
+    const result = await dispatchAR({
+      action: 'isolate_host',
+      args: [],   // manager IP is supplied by ossec.conf <extra_args>
       agentId: cleanAgentId,
     });
 
-    logger.info(`[CyberSentinelResponse] Successfully dispatched isolate_host for agent ${cleanAgentId}`);
+    logger.info(`[CyberSentinelResponse] isolate_host dispatched for ${cleanAgentId} (cmd=${result.command})`);
 
     return {
       success: true,
       agent_id: cleanAgentId,
       action: 'isolate_host',
+      os: result.os,
+      ar_command: result.command,
       timestamp,
-      enforced_by: 'CyberSentinel Control Plane',
-      details: response?.data || null,
+      enforced_by: 'CyberSentinel Manager',
+      details: result.data?.data || null,
       _simulated: false,
     };
   } catch (error) {
@@ -265,9 +319,6 @@ export async function isolate_host({ agent_id, _simulate }) {
   }
 }
 
-/**
- * Terminate a process on the target endpoint by PID or name.
- */
 export async function kill_process({ agent_id, process_name, pid, _simulate }) {
   const timestamp = new Date().toISOString();
 
@@ -278,7 +329,6 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
       details: { code: 'INVALID_INPUT' },
     };
   }
-
   if (!pid && !process_name) {
     return {
       success: false,
@@ -300,21 +350,19 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
       target,
       mode,
       timestamp,
-      enforced_by: 'CyberSentinel Control Plane',
+      enforced_by: 'CyberSentinel Manager',
       _simulated: true,
     };
   }
 
-  logger.info(`[CyberSentinelResponse] Killing process (${mode}=${target}) on ${cleanAgentId}`);
-
   try {
-    const response = await sendActiveResponse({
-      command: 'kill-process0',
+    const result = await dispatchAR({
+      action: 'kill_process',
       args: [mode, target],
       agentId: cleanAgentId,
     });
 
-    logger.info(`[CyberSentinelResponse] Successfully dispatched kill_process for agent ${cleanAgentId}`);
+    logger.info(`[CyberSentinelResponse] kill_process dispatched for ${cleanAgentId} (cmd=${result.command})`);
 
     return {
       success: true,
@@ -322,9 +370,11 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
       action: 'kill_process',
       target,
       mode,
+      os: result.os,
+      ar_command: result.command,
       timestamp,
-      enforced_by: 'CyberSentinel Control Plane',
-      details: response?.data || null,
+      enforced_by: 'CyberSentinel Manager',
+      details: result.data?.data || null,
       _simulated: false,
     };
   } catch (error) {
@@ -342,9 +392,6 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
   }
 }
 
-/**
- * Lock a user account on the target endpoint.
- */
 export async function disable_user({ agent_id, username, _simulate }) {
   const timestamp = new Date().toISOString();
 
@@ -355,7 +402,6 @@ export async function disable_user({ agent_id, username, _simulate }) {
       details: { code: 'INVALID_INPUT' },
     };
   }
-
   if (!username || typeof username !== 'string' || username.trim() === '') {
     return {
       success: false,
@@ -375,30 +421,30 @@ export async function disable_user({ agent_id, username, _simulate }) {
       action: 'disable_user',
       username: cleanUsername,
       timestamp,
-      enforced_by: 'CyberSentinel Control Plane',
+      enforced_by: 'CyberSentinel Manager',
       _simulated: true,
     };
   }
 
-  logger.info(`[CyberSentinelResponse] Disabling user ${cleanUsername} on ${cleanAgentId}`);
-
   try {
-    const response = await sendActiveResponse({
-      command: 'disable-user0',
+    const result = await dispatchAR({
+      action: 'disable_user',
       args: [cleanUsername],
       agentId: cleanAgentId,
     });
 
-    logger.info(`[CyberSentinelResponse] Successfully dispatched disable_user for agent ${cleanAgentId}`);
+    logger.info(`[CyberSentinelResponse] disable_user dispatched for ${cleanAgentId} (cmd=${result.command})`);
 
     return {
       success: true,
       agent_id: cleanAgentId,
       action: 'disable_user',
       username: cleanUsername,
+      os: result.os,
+      ar_command: result.command,
       timestamp,
-      enforced_by: 'CyberSentinel Control Plane',
-      details: response?.data || null,
+      enforced_by: 'CyberSentinel Manager',
+      details: result.data?.data || null,
       _simulated: false,
     };
   } catch (error) {
@@ -451,6 +497,8 @@ export const cybersentinelResponseConnector = {
         success: 'boolean',
         agent_id: 'string',
         action: 'string',
+        os: 'string',
+        ar_command: 'string',
         timestamp: 'string',
         enforced_by: 'string',
         _simulated: 'boolean',
@@ -463,6 +511,8 @@ export const cybersentinelResponseConnector = {
         action: 'string',
         target: 'string',
         mode: 'string',
+        os: 'string',
+        ar_command: 'string',
         timestamp: 'string',
         enforced_by: 'string',
         _simulated: 'boolean',
@@ -474,6 +524,8 @@ export const cybersentinelResponseConnector = {
         agent_id: 'string',
         action: 'string',
         username: 'string',
+        os: 'string',
+        ar_command: 'string',
         timestamp: 'string',
         enforced_by: 'string',
         _simulated: 'boolean',

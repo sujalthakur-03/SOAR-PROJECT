@@ -1,142 +1,233 @@
-# CyberSentinel SOAR — Wazuh Active Response Scripts
+# CyberSentinel SOAR — Active Response Scripts
 
-This directory contains the reference Active Response (AR) scripts that the
-CyberSentinel SOAR `cybersentinel_response` connector dispatches to agents
-via the Wazuh manager API (`PUT /active-response`).
+These are the production AR scripts that the SOAR's `cybersentinel_response`
+connector invokes through the CyberSentinel manager (rebranded Wazuh 4.14.x)
+via `PUT /active-response`.
 
-> These scripts run on the **endpoints** (Wazuh agents). The SOAR backend
-> talks only to the Wazuh **manager** — it never connects to agents directly.
+> The SOAR backend talks only to the manager. The manager forwards the AR
+> command to the agent. **These scripts run on the agent (the endpoint).**
 
-## Scripts
+---
 
-| Script              | Purpose                                     | Platform       |
-|---------------------|---------------------------------------------|----------------|
-| `isolate-host.sh`   | Network isolation via `iptables` DROP rules | Linux          |
-| `kill-process.sh`   | Kill a process by PID or name               | Linux          |
-| `disable-user.sh`   | Lock a local user account (`usermod -L`)    | Linux          |
-| `disable-user.cmd`  | Lock a local user account (`net user`)      | Windows        |
+## Script inventory
 
-Each script reads the Wazuh AR JSON payload from `stdin` (v4.2+ calling
-convention) and falls back to positional arguments for older agents. They log
-to `/var/ossec/logs/active-responses.log`.
+| Action       | Linux                       | Windows wrapper              | Windows logic              |
+|--------------|-----------------------------|------------------------------|----------------------------|
+| isolate-host | `soar-isolate-host.sh`      | `soar-isolate-host.cmd`      | `soar-isolate-host.ps1`    |
+| kill-process | `soar-kill-process.sh`      | `soar-kill-process.cmd`      | `soar-kill-process.ps1`    |
+| disable-user | `soar-disable-user.sh`      | `soar-disable-user.cmd`      | `soar-disable-user.ps1`    |
+
+All scripts read the Wazuh AR JSON payload from `stdin` (v4.2+ calling
+convention) and fall back to positional arguments for legacy agents. They log
+to `/var/ossec/logs/active-responses.log` (Linux) or
+`C:\Program Files (x86)\ossec-agent\active-response\active-responses.log`
+(Windows) with the prefix `cybersentinel-soar-<action>:`.
+
+---
+
+## Manager IP — single source of truth
+
+`soar-isolate-host.sh` / `.ps1` need the manager IP at runtime so they can
+whitelist it before applying the network DROP rules. **The IP is configured
+exactly once, in the manager's `ossec.conf`**, via the `<extra_args>` element
+of the isolate-host `<command>` block. Wazuh propagates `extra_args` into the
+AR JSON payload sent to the agent, where the script reads it from
+`parameters.extra_args[0]`.
+
+No agent-side env var, no per-host config file, no `WAZUH_MANAGER_IP` in the
+agent's environment.
+
+If the manager IP ever changes, edit one line in `ossec.conf` and restart the
+manager.
+
+---
+
+## Active Response naming convention — paired commands
+
+CyberSentinel uses Wazuh's idiomatic paired-command pattern (the same pattern
+Wazuh ships for `route-null` / `win_route-null`):
+
+| Action       | Linux command name      | Windows command name        |
+|--------------|-------------------------|-----------------------------|
+| isolate-host | `soar-isolate-host0`    | `win_soar-isolate-host0`    |
+| kill-process | `soar-kill-process0`    | `win_soar-kill-process0`    |
+| disable-user | `soar-disable-user0`    | `win_soar-disable-user0`    |
+
+The trailing `0` follows Wazuh's custom-command convention (signals "no
+built-in counterpart"). The `soar-` prefix puts SOAR-owned actions in their
+own namespace alongside Wazuh's seven built-in commands.
+
+The SOAR connector does an OS lookup (`GET /agents?agents_list=<id>&select=os.platform`)
+before each dispatch and routes Linux agents to `soar-X0` and Windows agents
+to `win_soar-X0`.
+
+---
 
 ## Deployment
 
-### 1. Copy scripts to each agent
+### 1. Place scripts on agents (or distribute via shared folder)
 
-On **Linux** agents:
+**Linux agents:**
 
 ```bash
-sudo cp isolate-host.sh kill-process.sh disable-user.sh \
+sudo cp soar-isolate-host.sh soar-kill-process.sh soar-disable-user.sh \
     /var/ossec/active-response/bin/
-sudo chown root:wazuh /var/ossec/active-response/bin/*.sh
-sudo chmod 750 /var/ossec/active-response/bin/*.sh
+sudo chown root:wazuh /var/ossec/active-response/bin/soar-*.sh
+sudo chmod 750 /var/ossec/active-response/bin/soar-*.sh
 ```
 
-On **Windows** agents:
+**Windows agents:**
 
 ```
-copy disable-user.cmd "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-isolate-host.cmd  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-isolate-host.ps1  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-kill-process.cmd  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-kill-process.ps1  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-disable-user.cmd  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-disable-user.ps1  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
 ```
 
-For `isolate-host.sh`, set the Wazuh manager IP as an env var in
-`/var/ossec/etc/ossec.conf` or pass it as a positional argument from the AR
-command definition:
+For multi-agent fleets, use Wazuh's shared folder
+(`/var/ossec/etc/shared/default/`) so the manager auto-pushes the scripts to
+every agent.
 
-```bash
-# Example systemd drop-in
-Environment=WAZUH_MANAGER_IP=10.0.0.5
-```
+### 2. Register commands on the manager
 
-### 2. Register the AR commands on the Wazuh manager
-
-Edit `/var/ossec/etc/ossec.conf` on the **manager** and add the `<command>`
-blocks. The custom AR command name convention used by this SOAR is
-`<name>0` (e.g., `isolate-host0`) — the trailing `0` tells Wazuh this is a
-custom command without a built-in counterpart.
+Edit `/var/ossec/etc/ossec.conf` on the manager. Replace `<MANAGER_IP>` with
+the actual manager IP (or comma-separated list for HA).
 
 ```xml
 <ossec_config>
 
-  <!-- ===== Command definitions ===== -->
+  <!-- ============== Linux command definitions ============== -->
 
   <command>
-    <name>isolate-host0</name>
-    <executable>isolate-host.sh</executable>
+    <name>soar-isolate-host0</name>
+    <executable>soar-isolate-host.sh</executable>
+    <extra_args><MANAGER_IP></extra_args>
     <timeout_allowed>yes</timeout_allowed>
   </command>
 
   <command>
-    <name>kill-process0</name>
-    <executable>kill-process.sh</executable>
-    <extra_args>pid name</extra_args>
+    <name>soar-kill-process0</name>
+    <executable>soar-kill-process.sh</executable>
     <timeout_allowed>no</timeout_allowed>
   </command>
 
   <command>
-    <name>disable-user0</name>
-    <executable>disable-user.sh</executable>
-    <extra_args>username</extra_args>
+    <name>soar-disable-user0</name>
+    <executable>soar-disable-user.sh</executable>
     <timeout_allowed>no</timeout_allowed>
   </command>
 
-  <!-- ===== Active response bindings (no rules_id => manual only) ===== -->
+  <!-- ============== Windows command definitions ============== -->
+
+  <command>
+    <name>win_soar-isolate-host0</name>
+    <executable>soar-isolate-host.cmd</executable>
+    <extra_args><MANAGER_IP></extra_args>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>win_soar-kill-process0</name>
+    <executable>soar-kill-process.cmd</executable>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
+  <command>
+    <name>win_soar-disable-user0</name>
+    <executable>soar-disable-user.cmd</executable>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
+  <!-- ============== Active Response bindings ============== -->
+  <!-- No <rules_id> => commands fire ONLY on manual SOAR dispatch -->
 
   <active-response>
-    <command>isolate-host0</command>
+    <command>soar-isolate-host0</command>
     <location>local</location>
     <timeout>0</timeout>
   </active-response>
-
   <active-response>
-    <command>kill-process0</command>
+    <command>soar-kill-process0</command>
+    <location>local</location>
+  </active-response>
+  <active-response>
+    <command>soar-disable-user0</command>
     <location>local</location>
   </active-response>
 
   <active-response>
-    <command>disable-user0</command>
+    <command>win_soar-isolate-host0</command>
+    <location>local</location>
+    <timeout>0</timeout>
+  </active-response>
+  <active-response>
+    <command>win_soar-kill-process0</command>
+    <location>local</location>
+  </active-response>
+  <active-response>
+    <command>win_soar-disable-user0</command>
     <location>local</location>
   </active-response>
 
 </ossec_config>
 ```
 
-**Important:** leave `rules_id` unset so the commands never fire automatically
-on rule matches — all executions must come from SOAR playbooks via the
-manager API (`PUT /active-response`).
+**Critical:** never add `<rules_id>` — these must fire ONLY on manual dispatch
+from SOAR, never on rule matches.
 
-### 3. Restart the Wazuh manager
+### 3. Restart the manager
+
+CyberSentinel runs as a Docker stack (rebranded Wazuh image). Use the branded
+control wrapper inside the container:
 
 ```bash
-sudo systemctl restart wazuh-manager
+docker exec cybersentinel-manager cybersentinel-control restart
 ```
+
+(On a non-containerized Wazuh manager: `systemctl restart wazuh-manager`.)
 
 ### 4. Verify from the SOAR side
 
-Use the Playbook Editor to build a test playbook with an action step that
-calls `cybersentinel_response` with action `isolate_host`, `kill_process`,
-or `disable_user`. Run it in **Simulation Mode** first — the SOAR connector
-will log "SIMULATION" lines without actually calling the manager API.
+Build a test playbook with an action step that calls `cybersentinel_response`
+with action `isolate_host`, `kill_process`, or `disable_user`. Run it in
+**Simulation Mode** first — the connector will log `SIMULATION` lines without
+calling the manager.
 
-When ready, execute for real. Watch:
+When ready, execute for real and watch:
 
-- `/tmp/backend.log` for `[CyberSentinelResponse]` entries from the SOAR
-- `/var/ossec/logs/active-responses.log` on the target agent for the
-  `cybersentinel-*` entries from the scripts above
+- `/tmp/backend.log` — `[CyberSentinelResponse]` entries from SOAR
+- `/var/ossec/logs/active-responses.log` on the target agent — the
+  `cybersentinel-soar-*` lines from the scripts
 
-## Safety features
+---
 
-All scripts include a blacklist of protected system accounts / processes
-(`init`, `systemd`, `sshd`, `root`, `Administrator`, etc.) and refuse to
-act on them. They also refuse to kill PIDs below 100 on Linux.
+## Safety features (built into every script)
+
+- **Manager-reachability precheck** (`isolate-host` only) — if the manager is
+  not reachable on TCP 1514/1515/55000 right now, the script refuses to apply
+  isolation. Prevents bricking an agent when the manager is down.
+- **Protected account / process blacklist** — `root`, `Administrator`,
+  `init`, `systemd`, `lsass`, `wazuh-agent`, `cybersentinel-agent`, etc., are
+  all refused.
+- **Low-PID refusal** — Linux script refuses any PID < 100.
+- **Idempotent** — repeat dispatches are no-ops, not corruptions:
+  - `kill-process` on a dead PID → exit 0 with "already not running"
+  - `disable-user` on an already-locked account → exit 0 with "already locked"
+  - `isolate-host` tears down its own chain before recreating it
+- **Strict mode** — Linux scripts use `set -eu`; PowerShell uses
+  `$ErrorActionPreference = 'Stop'`. No silent error swallowing.
+
+---
 
 ## Uninstalling
 
 ```bash
-# Linux
-sudo rm /var/ossec/active-response/bin/isolate-host.sh \
-        /var/ossec/active-response/bin/kill-process.sh \
-        /var/ossec/active-response/bin/disable-user.sh
-# Remove the <command>/<active-response> blocks from ossec.conf
-sudo systemctl restart wazuh-manager
+# Linux agents
+sudo rm /var/ossec/active-response/bin/soar-*.sh
+# Windows agents — delete soar-*.cmd and soar-*.ps1 from the bin\ folder.
+# Manager: remove the <command>/<active-response> blocks from ossec.conf
+docker exec cybersentinel-manager cybersentinel-control restart
 ```
