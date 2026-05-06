@@ -124,13 +124,34 @@ async function authenticate(config) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Known platform values the manager returns for os.platform, classified into
+ * the OS family that maps to our AR script set. Anything else fails closed
+ * with UNSUPPORTED_OS so the connector never silently routes a darwin/bsd
+ * agent to Linux scripts that would crash on missing iptables.
+ */
+const LINUX_PLATFORMS = new Set([
+  'amzn', 'ubuntu', 'debian', 'centos', 'rhel', 'redhat', 'rocky',
+  'almalinux', 'oracle', 'suse', 'sles', 'opensuse', 'fedora', 'linux',
+]);
+const WINDOWS_PLATFORMS = new Set(['windows']);
+
+function classifyOSPlatform(platform) {
+  const p = String(platform || '').toLowerCase();
+  if (WINDOWS_PLATFORMS.has(p)) return 'windows';
+  if (LINUX_PLATFORMS.has(p)) return 'linux';
+  throw Object.assign(
+    new Error(`Unsupported agent OS platform '${platform}' — no AR scripts available for this family`),
+    { code: 'UNSUPPORTED_OS', retryable: false }
+  );
+}
+
+/**
  * Look up the OS family of an agent so we can pick the right paired
  * AR command name (linux → soar-X0, windows → win_soar-X0).
  *
  * GET /agents?agents_list=<id>&select=os.platform
- *
- * Returns 'windows' or 'linux'. macOS/BSD/etc. fall through to 'linux'
- * since their AR scripts share the POSIX base.
+ * Response shape (Wazuh 4.14.x):
+ *   { data: { affected_items: [ { id, os: { platform: "amzn|ubuntu|windows|..." } } ] } }
  */
 async function getAgentOS(agentId, token, config) {
   const response = await axios.get(
@@ -150,9 +171,7 @@ async function getAgentOS(agentId, token, config) {
     );
   }
 
-  const platform = String(items[0]?.os?.platform || '').toLowerCase();
-  if (platform === 'windows') return 'windows';
-  return 'linux';
+  return classifyOSPlatform(items[0]?.os?.platform);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

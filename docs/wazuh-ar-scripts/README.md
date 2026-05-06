@@ -37,7 +37,30 @@ AR JSON payload sent to the agent, where the script reads it from
 No agent-side env var, no per-host config file, no `WAZUH_MANAGER_IP` in the
 agent's environment.
 
-If the manager IP ever changes, edit one line in `ossec.conf` and restart the
+### Deploy-time substitution
+
+The shipped `ossec.conf` contains the literal sentinel string
+`MANAGER_IP_PLACEHOLDER` (chosen because angle-bracketed placeholders like
+`<MANAGER_IP>` are not well-formed XML and break image-build-time parsers).
+**The operator must substitute it with the real manager IP before isolation
+will function.** The script's input validation will refuse to apply firewall
+rules while the placeholder is in place — fail-safe by design.
+
+Substitution methods (pick one):
+
+```bash
+# 1. Inside a running container — quickest:
+docker exec cybersentinel-manager sed -i \
+    's/MANAGER_IP_PLACEHOLDER/10.0.0.5/g' /var/ossec/etc/ossec.conf
+docker exec cybersentinel-manager cybersentinel-control restart
+
+# 2. Pre-image-rebuild — for permanent customer-specific images:
+sed -i 's/MANAGER_IP_PLACEHOLDER/10.0.0.5/g' \
+    cybersentinel-manager/config/ossec.conf
+docker compose build && docker compose up -d
+```
+
+If the manager IP ever changes, repeat the substitution and restart the
 manager.
 
 ---
@@ -93,7 +116,7 @@ every agent.
 
 ### 2. Register commands on the manager
 
-Edit `/var/ossec/etc/ossec.conf` on the manager. Replace `<MANAGER_IP>` with
+Edit `/var/ossec/etc/ossec.conf` on the manager. Replace `MANAGER_IP_PLACEHOLDER` with
 the actual manager IP (or comma-separated list for HA).
 
 ```xml
@@ -104,7 +127,7 @@ the actual manager IP (or comma-separated list for HA).
   <command>
     <name>soar-isolate-host0</name>
     <executable>soar-isolate-host.sh</executable>
-    <extra_args><MANAGER_IP></extra_args>
+    <extra_args>MANAGER_IP_PLACEHOLDER</extra_args>
     <timeout_allowed>yes</timeout_allowed>
   </command>
 
@@ -125,7 +148,7 @@ the actual manager IP (or comma-separated list for HA).
   <command>
     <name>win_soar-isolate-host0</name>
     <executable>soar-isolate-host.cmd</executable>
-    <extra_args><MANAGER_IP></extra_args>
+    <extra_args>MANAGER_IP_PLACEHOLDER</extra_args>
     <timeout_allowed>yes</timeout_allowed>
   </command>
 
