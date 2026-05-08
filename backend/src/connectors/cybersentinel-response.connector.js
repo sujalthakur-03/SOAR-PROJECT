@@ -135,6 +135,25 @@ const LINUX_PLATFORMS = new Set([
 ]);
 const WINDOWS_PLATFORMS = new Set(['windows']);
 
+/**
+ * Wazuh's manager-side agent ID is "000" — it represents the manager itself,
+ * not an enrolled endpoint. The AR queue refuses to dispatch to agent 000
+ * (verified empirically against 4.14.4: API returns HTTP 200 with
+ * affected_items=[] and message "AR command was not sent to any agent").
+ * Fail fast on the connector side so analysts get a clear error instead of
+ * a silent no-op.
+ */
+function validateAgentId(agentId, action) {
+  if (agentId === '000') {
+    return {
+      success: false,
+      error: `Cannot dispatch ${action} to agent 000 (the manager itself). Specify an enrolled endpoint agent ID.`,
+      details: { code: 'INVALID_AGENT_TARGET', retryable: false },
+    };
+  }
+  return null;
+}
+
 function classifyOSPlatform(platform) {
   const p = String(platform || '').toLowerCase();
   if (WINDOWS_PLATFORMS.has(p)) return 'windows';
@@ -292,6 +311,8 @@ export async function isolate_host({ agent_id, _simulate }) {
   }
 
   const cleanAgentId = agent_id.trim();
+  const agentReject = validateAgentId(cleanAgentId, 'isolate_host');
+  if (agentReject) return agentReject;
 
   if (_simulate) {
     logger.info(`[CyberSentinelResponse] SIMULATION: Would isolate host ${cleanAgentId}`);
@@ -357,6 +378,9 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
   }
 
   const cleanAgentId = agent_id.trim();
+  const agentReject = validateAgentId(cleanAgentId, 'kill_process');
+  if (agentReject) return agentReject;
+
   const target = pid ? String(pid).trim() : String(process_name).trim();
   const mode = pid ? 'pid' : 'name';
 
@@ -430,6 +454,9 @@ export async function disable_user({ agent_id, username, _simulate }) {
   }
 
   const cleanAgentId = agent_id.trim();
+  const agentReject = validateAgentId(cleanAgentId, 'disable_user');
+  if (agentReject) return agentReject;
+
   const cleanUsername = username.trim();
 
   if (_simulate) {
