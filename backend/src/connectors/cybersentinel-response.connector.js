@@ -190,7 +190,15 @@ async function getAgentOS(agentId, token, config) {
     );
   }
 
-  return classifyOSPlatform(items[0]?.os?.platform);
+  const rawPlatform = items[0]?.os?.platform;
+  try {
+    return classifyOSPlatform(rawPlatform);
+  } catch (err) {
+    if (err.code === 'UNSUPPORTED_OS') {
+      err.message = `Agent '${agentId}' (platform='${rawPlatform}'): ${err.message}`;
+    }
+    throw err;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
