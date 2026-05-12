@@ -1,154 +1,122 @@
 {
   "name": "SOAR AR Smoke Test 3.0.5",
-  "description": "Live-fire validation of all six Active Response actions against the 192.168.1.222 dev manager. Linux target: agent 005 (Agent-70). Windows kill/disable target: agent 007 (RootSeeker). Windows isolate target: agent 056 (AnshWindowsVirtualMachine). Manual dispatch only — not webhook-triggered. Before running, operator must pre-create user 'soartest' on agents 005 and 007, and pre-run 'sleep 999 &' on agent 005 + 'powershell -c Start-Sleep -Seconds 999' on agent 007 to provide benign processes for the kill_process steps.",
+  "description": "Live-fire validation of Active Response actions against the 192.168.1.222 dev manager. Linux target: agent 005 (Agent-70). Windows kill/disable target: agent 007 (RootSeeker). Scope reduced to 8 steps — agent 056 (Windows isolate) is deferred until SOAR AR scripts are deployed there. Manual dispatch only — not webhook-triggered. Operator pre-creates throwaway user 'soartest-linux' on 005 + 'soartest-win' on 007, and spawns benign processes for the kill_process steps. PIDs are communicated by the manager-side operator at run time and entered as inputs before each kill_process step is dispatched.",
   "dsl": {
     "trigger_type": "manual",
     "severity": "medium",
     "shadow_mode": false,
     "tags": ["smoke-test", "active-response", "release-3.0.5"],
+    "trigger": {
+      "source": "manual",
+      "severity_threshold": "medium"
+    },
     "steps": [
       {
         "step_id": "step_01_linux_kill_process",
         "type": "action",
         "name": "Linux kill_process on agent 005 (Agent-70)",
-        "description": "Kill 'sleep' processes on Linux agent. Pre-req: sleep 999 & running on 005.",
         "connector_id": "cybersentinel_response",
         "action_type": "kill_process",
-        "inputs": {
+        "parameters": {
           "agent_id": "005",
           "process_name": "sleep"
         },
-        "on_success": { "behavior": "continue" },
+        "on_success": "step_02_linux_disable_user_lock",
         "on_failure": "continue"
       },
       {
         "step_id": "step_02_linux_disable_user_lock",
         "type": "action",
         "name": "Linux disable_user LOCK on agent 005",
-        "description": "Lock 'soartest' account on Linux agent. Pre-req: useradd -m soartest on 005.",
         "connector_id": "cybersentinel_response",
         "action_type": "disable_user",
-        "inputs": {
+        "parameters": {
           "agent_id": "005",
-          "username": "soartest",
+          "username": "soartest-linux",
           "mode": "lock"
         },
-        "on_success": { "behavior": "continue" },
+        "on_success": "step_03_linux_disable_user_unlock",
         "on_failure": "continue"
       },
       {
         "step_id": "step_03_linux_disable_user_unlock",
         "type": "action",
         "name": "Linux disable_user UNLOCK on agent 005",
-        "description": "Reverse step 02 — unlock 'soartest' account via Wazuh AR delete path.",
         "connector_id": "cybersentinel_response",
         "action_type": "disable_user",
-        "inputs": {
+        "parameters": {
           "agent_id": "005",
-          "username": "soartest",
+          "username": "soartest-linux",
           "mode": "unlock"
         },
-        "on_success": { "behavior": "continue" },
+        "on_success": "step_04_windows_kill_process",
         "on_failure": "continue"
       },
       {
         "step_id": "step_04_windows_kill_process",
         "type": "action",
         "name": "Windows kill_process on agent 007 (RootSeeker)",
-        "description": "Kill 'powershell' processes running Start-Sleep on Windows agent. Pre-req: a sleeping powershell process on 007.",
         "connector_id": "cybersentinel_response",
         "action_type": "kill_process",
-        "inputs": {
+        "parameters": {
           "agent_id": "007",
-          "process_name": "powershell"
+          "process_name": "notepad"
         },
-        "on_success": { "behavior": "continue" },
+        "on_success": "step_05_windows_disable_user_lock",
         "on_failure": "continue"
       },
       {
         "step_id": "step_05_windows_disable_user_lock",
         "type": "action",
         "name": "Windows disable_user LOCK on agent 007",
-        "description": "Lock 'soartest' account on Windows agent. Pre-req: net user soartest /add on 007.",
         "connector_id": "cybersentinel_response",
         "action_type": "disable_user",
-        "inputs": {
+        "parameters": {
           "agent_id": "007",
-          "username": "soartest",
+          "username": "soartest-win",
           "mode": "lock"
         },
-        "on_success": { "behavior": "continue" },
+        "on_success": "step_06_windows_disable_user_unlock",
         "on_failure": "continue"
       },
       {
         "step_id": "step_06_windows_disable_user_unlock",
         "type": "action",
         "name": "Windows disable_user UNLOCK on agent 007",
-        "description": "Reverse step 05 — unlock 'soartest' on Windows via AR delete path.",
         "connector_id": "cybersentinel_response",
         "action_type": "disable_user",
-        "inputs": {
+        "parameters": {
           "agent_id": "007",
-          "username": "soartest",
+          "username": "soartest-win",
           "mode": "unlock"
         },
-        "on_success": { "behavior": "continue" },
+        "on_success": "step_07_linux_isolate_host",
         "on_failure": "continue"
       },
       {
         "step_id": "step_07_linux_isolate_host",
         "type": "action",
         "name": "Linux isolate_host ADD on agent 005",
-        "description": "ISOLATE Linux endpoint. WARNING: pre-stage SSH from a non-192.168.1.222 jump host before running. Step 08 MUST run within 60s.",
         "connector_id": "cybersentinel_response",
         "action_type": "isolate_host",
-        "inputs": {
+        "parameters": {
           "agent_id": "005",
           "mode": "isolate"
         },
-        "on_success": { "behavior": "continue" },
+        "on_success": "step_08_linux_isolate_host_release",
         "on_failure": "stop"
       },
       {
         "step_id": "step_08_linux_isolate_host_release",
         "type": "action",
         "name": "Linux isolate_host RELEASE on agent 005",
-        "description": "Reverse step 07 — un-isolate via AR delete path. Restores network on 005.",
         "connector_id": "cybersentinel_response",
         "action_type": "isolate_host",
-        "inputs": {
+        "parameters": {
           "agent_id": "005",
           "mode": "release"
         },
-        "on_success": { "behavior": "continue" },
-        "on_failure": "stop"
-      },
-      {
-        "step_id": "step_09_windows_isolate_host",
-        "type": "action",
-        "name": "Windows isolate_host ADD on agent 056 (AnshWindowsVirtualMachine)",
-        "description": "ISOLATE Windows VM. WARNING: pre-stage hypervisor console access before running. Step 10 MUST run within 60s.",
-        "connector_id": "cybersentinel_response",
-        "action_type": "isolate_host",
-        "inputs": {
-          "agent_id": "056",
-          "mode": "isolate"
-        },
-        "on_success": { "behavior": "continue" },
-        "on_failure": "stop"
-      },
-      {
-        "step_id": "step_10_windows_isolate_host_release",
-        "type": "action",
-        "name": "Windows isolate_host RELEASE on agent 056",
-        "description": "Reverse step 09 — restore Windows network on 056.",
-        "connector_id": "cybersentinel_response",
-        "action_type": "isolate_host",
-        "inputs": {
-          "agent_id": "056",
-          "mode": "release"
-        },
-        "on_success": { "behavior": "end" },
+        "on_success": "__END__",
         "on_failure": "stop"
       }
     ]

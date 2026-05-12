@@ -5,41 +5,47 @@ platform against the manager on `192.168.1.222`.
 
 ## soar-ar-smoke-test-3.0.5.json
 
-10-step playbook that exercises every Active Response action across Linux
-and Windows agents.
+8-step playbook that exercises every Active Response action across Linux
+and Windows agents that currently have SOAR AR scripts deployed.
+
+> Windows isolate_host on agent 056 was originally steps 9 + 10 but is
+> deferred — AR scripts are not yet on that agent. Will be a second short
+> run after deployment.
 
 ### Targets
 
-| Agent ID | Name                       | OS      | Used in steps      |
-|----------|----------------------------|---------|--------------------|
-| 005      | Agent-70                   | Ubuntu  | 1, 2, 3, 7, 8      |
-| 007      | RootSeeker                 | Windows | 4, 5, 6            |
-| 056      | AnshWindowsVirtualMachine  | Windows | 9, 10              |
+| Agent ID | Name                       | OS      | Used in steps |
+|----------|----------------------------|---------|---------------|
+| 005      | Agent-70                   | Ubuntu  | 1, 2, 3, 7, 8 |
+| 007      | RootSeeker                 | Windows | 4, 5, 6       |
 
-### Pre-flight setup (operator runs ONCE before the test)
+### Pre-flight setup (manager-side operator owns this)
+
+The manager-side operator (on 192.168.1.222) creates test artifacts and
+hands the PIDs to the SOAR side at run time. PIDs and usernames are
+substituted into the playbook inputs OR passed as CLI flags to
+`ar-dispatch.js` (see step-by-step below).
 
 On agent 005 (Linux):
 ```bash
-ssh root@192.168.1.70 'useradd -m soartest 2>/dev/null; sleep 999 &'
+ssh root@192.168.1.70 'useradd -m soartest-linux 2>/dev/null'
+ssh root@192.168.1.70 'nohup sleep 999 >/dev/null 2>&1 & echo "TEST_PID=$!"'
+# manager-side operator notes the TEST_PID and hands it to the SOAR side
 ```
 
-On agent 007 (Windows, via PSExec/RDP/console):
+On agent 007 (Windows, via PSExec/RDP/hypervisor console):
 ```cmd
-net user soartest Soart3st!Pass /add
-start /B powershell.exe -Command "Start-Sleep -Seconds 999"
+net user soartest-win Soart3st!Pass /add
+start /B notepad.exe
+tasklist /FI "IMAGENAME eq notepad.exe"
+:: note the PID and hand it to the SOAR side
 ```
 
-On agent 056 (Windows, hypervisor console pre-staged):
-- No setup required — only isolate_host tests target this agent.
-
-### Pre-stage console access (BEFORE step 7 and step 9)
+### Pre-stage console access (BEFORE step 7)
 
 - Linux agent 005: open an SSH session from a jump host that is NOT
   `192.168.1.222`. Keep it open. If isolation lingers, run `iptables -F`
   from that session.
-- Windows agent 056: open hypervisor console (vSphere / Hyper-V Manager /
-  Proxmox / etc.) and keep it visible. If isolation lingers and RDP is
-  blocked, recover via console.
 
 ### Import via API
 
@@ -62,35 +68,56 @@ In the SOAR Playbook Editor:
 3. Verify each step shows SIMULATION log lines without dispatching
 4. Confirm input mapping (agent IDs, usernames, modes) is correct
 
-### Live-fire run
+### Live-fire run — single-step CLI dispatcher (preferred)
 
-Once simulation is clean and console access is staged:
-1. Click "Run" → Simulation mode OFF
-2. Coordinate with the manager-side operator who's tailing
-   `active-responses.log` on `192.168.1.222`
-3. Watch each step's result in the Execution Detail view
-4. After step 10, both sides cross-check log lines against the contract:
+The playbook engine runs sequentially with no native pause-between-steps
+gate. For interactive live-fire validation with manager-side ACK between
+each step, use the CLI dispatcher: `backend/scripts/ar-dispatch.js`. It
+loads the real connector code and invokes ONE action per call, so each
+dispatch is independently gated.
+
+```bash
+# Run inside the soar-backend container (uses container's .env)
+docker exec soar-backend node /app/scripts/ar-dispatch.js <action> [flags]
+
+# Preview the PUT body WITHOUT dispatching:
+docker exec soar-backend node /app/scripts/ar-dispatch.js \
+    kill_process --agent 005 --pid 12345 --dry-run-preview
+```
+
+Step-by-step commands (substitute `<PID>` with the value the
+manager-side operator gives you at run time):
+
+| Step | Command |
+|------|---------|
+| 1 | `docker exec soar-backend node /app/scripts/ar-dispatch.js kill_process --agent 005 --pid <LINUX_PID>` |
+| 2 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 005 --user soartest-linux --mode lock` |
+| 3 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 005 --user soartest-linux --mode unlock` |
+| 4 | `docker exec soar-backend node /app/scripts/ar-dispatch.js kill_process --agent 007 --pid <WIN_PID>` |
+| 5 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 007 --user soartest-win --mode lock` |
+| 6 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 007 --user soartest-win --mode unlock` |
+| 7 | `docker exec soar-backend node /app/scripts/ar-dispatch.js isolate_host --agent 005 --mode isolate` |
+| 8 | `docker exec soar-backend node /app/scripts/ar-dispatch.js isolate_host --agent 005 --mode release` |
+
+Expected agent-side log line per step:
 
 | Step | Expected agent-side log line                                                                  |
 |------|-----------------------------------------------------------------------------------------------|
 | 1    | `cybersentinel-soar-kill-process: Killed PID <n> (sleep)` on 005                              |
-| 2    | `cybersentinel-soar-disable-user: User 'soartest' locked successfully` on 005                 |
-| 3    | `cybersentinel-soar-disable-user: User 'soartest' unlocked successfully` on 005               |
-| 4    | `cybersentinel-soar-kill-process: Killed PID <n> (powershell)` on 007                         |
-| 5    | `cybersentinel-soar-disable-user: Account 'soartest' locked successfully` on 007              |
-| 6    | `cybersentinel-soar-disable-user: Account 'soartest' unlocked successfully` on 007            |
+| 2    | `cybersentinel-soar-disable-user: User 'soartest-linux' locked successfully` on 005           |
+| 3    | `cybersentinel-soar-disable-user: User 'soartest-linux' unlocked successfully` on 005         |
+| 4    | `cybersentinel-soar-kill-process: Killed PID <n> (notepad)` on 007                            |
+| 5    | `cybersentinel-soar-disable-user: Account 'soartest-win' locked successfully` on 007          |
+| 6    | `cybersentinel-soar-disable-user: Account 'soartest-win' unlocked successfully` on 007        |
 | 7    | `cybersentinel-soar-isolate-host: Isolation applied (manager=192.168.1.222 whitelisted)` on 005 |
 | 8    | `cybersentinel-soar-isolate-host: Isolation removed` on 005                                   |
-| 9    | `cybersentinel-soar-isolate-host: Isolation applied (manager=192.168.1.222 whitelisted)` on 056 |
-| 10   | `cybersentinel-soar-isolate-host: Isolation removed` on 056                                   |
 
 ### Step ordering rationale
 
-Steps are ordered least-to-most destructive. Steps 7+8 (Linux isolation)
-run before 9+10 (Windows isolation) because Linux recovery (SSH from jump
-host) is faster than Windows recovery (hypervisor console). Each
-isolate_host ADD step is paired with a RELEASE step IMMEDIATELY after, so
-any failure in the RELEASE step is caught within ~60s of the ADD.
+Steps are ordered least-to-most destructive. Non-destructive actions
+(kill, lock/unlock) run first; isolation runs last. Each isolate_host ADD
+step is paired with a RELEASE step IMMEDIATELY after, so any failure in
+the RELEASE step is caught within ~60s of the ADD.
 
 ### On-failure semantics
 
@@ -100,12 +127,13 @@ any failure in the RELEASE step is caught within ~60s of the ADD.
   playbook so the operator can intervene before adding more isolation
   load.
 
-### Post-test cleanup
+### Post-test cleanup (manager-side operator)
 
 ```bash
 # Linux agent 005
-ssh root@192.168.1.70 'userdel -r soartest'
+ssh root@192.168.1.70 'userdel -r soartest-linux'
 
 # Windows agent 007 (PSExec / console)
-net user soartest /delete
+net user soartest-win /delete
+taskkill /IM notepad.exe /F   :: if any lingering test notepad processes
 ```
