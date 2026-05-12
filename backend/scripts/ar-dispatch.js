@@ -65,7 +65,9 @@ function previewPutBody(action, inputs) {
   const cmd = isWin ? `win_${base}` : base;
   const deletion = ['release', 'unisolate', 'unlock', 'enable', 'delete']
     .includes(String(inputs.mode || '').toLowerCase());
-  const command = deletion ? `!${cmd}` : cmd;
+  // Wazuh 4.14.x manual-dispatch API requires "!" prefix on every command.
+  // Delete-path is currently refused upstream by the connector — flagged in notes.
+  const command = `!${cmd}`;
 
   let argsArr = [];
   if (action === 'kill_process') {
@@ -91,7 +93,10 @@ function previewPutBody(action, inputs) {
     notes: {
       os_lookup: 'GET /agents?agents_list=<id>&select=os.platform — fetched at dispatch time',
       windows_routing: 'preview assumes agent 007 = windows; live dispatch resolves via real OS lookup',
-      deletion_mode: deletion ? `mode="${inputs.mode}" → "!" prefix for AR delete path` : 'add (no prefix)',
+      api_prefix: 'Wazuh 4.14.x API requires "!" prefix on every manual dispatch (verified empirically 2026-05-12)',
+      deletion_status: deletion
+        ? `WARNING: mode="${inputs.mode}" → DELETE-PATH currently UNSUPPORTED by connector. Will refuse with DELETE_PATH_UNSUPPORTED.`
+        : 'add path (default)',
     },
   };
 }

@@ -214,9 +214,25 @@ async function getAgentOS(agentId, token, config) {
  * The manager bundles its ossec.conf <extra_args> with the API `arguments`
  * and forwards the combined list to the agent script as parameters.extra_args.
  *
- * When `deletion=true`, the resolved command name is prefixed with "!" —
- * Wazuh's API convention for triggering the script's delete path (un-isolate,
- * unlock). The agent receives parameters.command="delete" instead of "add".
+ * COMMAND-NAME FORMAT (verified empirically against Wazuh 4.14.x dev manager
+ * on 192.168.1.222 — May 2026):
+ *   The API requires a "!" prefix on the command name for manual
+ *   PUT /active-response dispatch. Without it the manager returns 1652
+ *   "command not defined" even when the <command> block is registered in
+ *   ossec.conf. The "!" prefix tells the manager "dispatch this directly,
+ *   not via rule-match." Even built-in commands like firewall-drop0 fail
+ *   without it on this API version.
+ *
+ * DELETE-PATH LIMITATION:
+ *   Wazuh's API has no field to manually trigger the script's "delete"
+ *   branch (un-isolate, unlock). The "delete" command name is normally
+ *   issued automatically by the manager when an AR's <timeout> elapses.
+ *   For now this connector REFUSES `deletion=true` dispatches and returns
+ *   DELETE_PATH_UNSUPPORTED. Resolving this requires either:
+ *     - Adding finite <timeout> to the AR <active-response> blocks
+ *     - Adding paired *-release0 / *-unlock0 commands to ossec.conf
+ *     - Changing agent scripts to read mode from extra_args
+ *   See README in docs/wazuh-ar-scripts/ for the agreed path.
  */
 async function dispatchAR({ action, args, agentId, deletion = false }) {
   const config = getControlPlaneConfig();
@@ -228,16 +244,25 @@ async function dispatchAR({ action, args, agentId, deletion = false }) {
     );
   }
 
+  if (deletion) {
+    throw Object.assign(
+      new Error('Delete-path (un-isolate / unlock) is not supported via direct API dispatch on this manager. Use the auto-expiry <timeout> on the AR <active-response> block instead, or wait for the paired-release command set to land. See backend/src/connectors/cybersentinel-response.connector.js for context.'),
+      { code: 'DELETE_PATH_UNSUPPORTED', retryable: false }
+    );
+  }
+
   const token = await authenticate(config);
   const os = await getAgentOS(agentId, token, config);
   const baseCmd = commandForOS(action, os);
-  const command = deletion ? `!${baseCmd}` : baseCmd;
+  const command = `!${baseCmd}`;   // Required for manual API dispatch (Wazuh 4.14.x)
 
-  logger.info(`[CyberSentinelResponse] Dispatch ${action} → ${command} on agent ${agentId} (os=${os}, deletion=${deletion})`);
+  const finalArgs = Array.isArray(args) ? args : [];
+
+  logger.info(`[CyberSentinelResponse] Dispatch ${action} → ${command} args=${JSON.stringify(finalArgs)} agent=${agentId} (os=${os})`);
 
   const body = {
     command,
-    arguments: Array.isArray(args) ? args : [],
+    arguments: finalArgs,
     alert: {},
   };
 
@@ -254,7 +279,19 @@ async function dispatchAR({ action, args, agentId, deletion = false }) {
     }
   );
 
-  return { os, command, data: response.data };
+  // Manager returns HTTP 200 with structured failure inside the body for
+  // dispatch-level errors (e.g. command-not-defined, agent-offline). Surface
+  // those as connector errors instead of silently reporting success.
+  const failedItems = response.data?.data?.failed_items || [];
+  if (failedItems.length > 0) {
+    const first = failedItems[0]?.error || {};
+    throw Object.assign(
+      new Error(`Manager rejected dispatch: ${first.message || 'unknown error'} (code ${first.code || '?'})`),
+      { code: `MANAGER_DISPATCH_FAILED_${first.code || 'UNKNOWN'}`, retryable: false }
+    );
+  }
+
+  return { os, command, args: finalArgs, data: response.data };
 }
 
 /**
