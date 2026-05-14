@@ -1,6 +1,6 @@
 {
   "name": "SOAR AR Smoke Test 3.0.5",
-  "description": "Live-fire validation of Active Response actions against the 192.168.1.222 dev manager. Linux target: agent 005 (Agent-70). Windows kill/disable target: agent 007 (RootSeeker). Scope reduced to 8 steps — agent 056 (Windows isolate) is deferred until SOAR AR scripts are deployed there. Manual dispatch only — not webhook-triggered. Operator pre-creates throwaway user 'soartest-linux' on 005 + 'soartest-win' on 007, and spawns benign processes for the kill_process steps. PIDs are communicated by the manager-side operator at run time and entered as inputs before each kill_process step is dispatched.",
+  "description": "Live-fire validation of ADD-path Active Response actions against the 192.168.1.222 dev manager. Linux target: agent 005 (Agent-70). Windows target: agent 007 (RootSeeker). 5-step matrix — release/unlock paths were removed from SOAR's contract on 2026-05-14: isolate-host release uses Wazuh native <timeout> auto-expiry; disable-user unlock is a manual SOC operator task. Operator pre-creates 'soartest-linux' on 005 and 'soartest-win' on 007, spawns benign processes for kill_process steps. Manual dispatch only — not webhook-triggered.",
   "dsl": {
     "trigger_type": "manual",
     "severity": "medium",
@@ -21,39 +21,24 @@
           "agent_id": "005",
           "process_name": "sleep"
         },
-        "on_success": "step_02_linux_disable_user_lock",
+        "on_success": "step_02_linux_disable_user",
         "on_failure": "continue"
       },
       {
-        "step_id": "step_02_linux_disable_user_lock",
+        "step_id": "step_02_linux_disable_user",
         "type": "action",
-        "name": "Linux disable_user LOCK on agent 005",
+        "name": "Linux disable_user on agent 005",
         "connector_id": "cybersentinel_response",
         "action_type": "disable_user",
         "parameters": {
           "agent_id": "005",
-          "username": "soartest-linux",
-          "mode": "lock"
+          "username": "soartest-linux"
         },
-        "on_success": "step_03_linux_disable_user_unlock",
+        "on_success": "step_03_windows_kill_process",
         "on_failure": "continue"
       },
       {
-        "step_id": "step_03_linux_disable_user_unlock",
-        "type": "action",
-        "name": "Linux disable_user UNLOCK on agent 005",
-        "connector_id": "cybersentinel_response",
-        "action_type": "disable_user",
-        "parameters": {
-          "agent_id": "005",
-          "username": "soartest-linux",
-          "mode": "unlock"
-        },
-        "on_success": "step_04_windows_kill_process",
-        "on_failure": "continue"
-      },
-      {
-        "step_id": "step_04_windows_kill_process",
+        "step_id": "step_03_windows_kill_process",
         "type": "action",
         "name": "Windows kill_process on agent 007 (RootSeeker)",
         "connector_id": "cybersentinel_response",
@@ -62,59 +47,30 @@
           "agent_id": "007",
           "process_name": "notepad"
         },
-        "on_success": "step_05_windows_disable_user_lock",
+        "on_success": "step_04_windows_disable_user",
         "on_failure": "continue"
       },
       {
-        "step_id": "step_05_windows_disable_user_lock",
+        "step_id": "step_04_windows_disable_user",
         "type": "action",
-        "name": "Windows disable_user LOCK on agent 007",
+        "name": "Windows disable_user on agent 007",
         "connector_id": "cybersentinel_response",
         "action_type": "disable_user",
         "parameters": {
           "agent_id": "007",
-          "username": "soartest-win",
-          "mode": "lock"
+          "username": "soartest-win"
         },
-        "on_success": "step_06_windows_disable_user_unlock",
+        "on_success": "step_05_linux_isolate_host",
         "on_failure": "continue"
       },
       {
-        "step_id": "step_06_windows_disable_user_unlock",
+        "step_id": "step_05_linux_isolate_host",
         "type": "action",
-        "name": "Windows disable_user UNLOCK on agent 007",
-        "connector_id": "cybersentinel_response",
-        "action_type": "disable_user",
-        "parameters": {
-          "agent_id": "007",
-          "username": "soartest-win",
-          "mode": "unlock"
-        },
-        "on_success": "step_07_linux_isolate_host",
-        "on_failure": "continue"
-      },
-      {
-        "step_id": "step_07_linux_isolate_host",
-        "type": "action",
-        "name": "Linux isolate_host ADD on agent 005",
+        "name": "Linux isolate_host on agent 005 (auto-release via manager <timeout>)",
         "connector_id": "cybersentinel_response",
         "action_type": "isolate_host",
         "parameters": {
-          "agent_id": "005",
-          "mode": "isolate"
-        },
-        "on_success": "step_08_linux_isolate_host_release",
-        "on_failure": "stop"
-      },
-      {
-        "step_id": "step_08_linux_isolate_host_release",
-        "type": "action",
-        "name": "Linux isolate_host RELEASE on agent 005",
-        "connector_id": "cybersentinel_response",
-        "action_type": "isolate_host",
-        "parameters": {
-          "agent_id": "005",
-          "mode": "release"
+          "agent_id": "005"
         },
         "on_success": "__END__",
         "on_failure": "stop"

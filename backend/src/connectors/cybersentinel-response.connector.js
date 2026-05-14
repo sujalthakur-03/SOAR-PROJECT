@@ -223,31 +223,25 @@ async function getAgentOS(agentId, token, config) {
  *   not via rule-match." Even built-in commands like firewall-drop0 fail
  *   without it on this API version.
  *
- * DELETE-PATH LIMITATION:
- *   Wazuh's API has no field to manually trigger the script's "delete"
- *   branch (un-isolate, unlock). The "delete" command name is normally
- *   issued automatically by the manager when an AR's <timeout> elapses.
- *   For now this connector REFUSES `deletion=true` dispatches and returns
- *   DELETE_PATH_UNSUPPORTED. Resolving this requires either:
- *     - Adding finite <timeout> to the AR <active-response> blocks
- *     - Adding paired *-release0 / *-unlock0 commands to ossec.conf
- *     - Changing agent scripts to read mode from extra_args
- *   See README in docs/wazuh-ar-scripts/ for the agreed path.
+ * ADD-ONLY DISPATCH MODEL:
+ *   This connector dispatches ADD-path AR only. Wazuh's API has no field
+ *   to manually trigger an agent script's "delete" branch (un-isolate /
+ *   unlock). Per joint decision with the manager team (May 2026):
+ *     - Time-bounded actions (isolate-host) use Wazuh's native <timeout>
+ *       auto-expiry on the <active-response> block. The manager
+ *       dispatches "delete" to the agent automatically when the timer
+ *       fires.
+ *     - Un-bounded actions (disable-user, kill-process) are intentionally
+ *       one-way from SOAR. Reversal is a manual SOC operator task and
+ *       is not in the connector's contract.
  */
-async function dispatchAR({ action, args, agentId, deletion = false }) {
+async function dispatchAR({ action, args, agentId }) {
   const config = getControlPlaneConfig();
 
   if (!config.url) {
     throw Object.assign(
       new Error('CyberSentinel manager is not configured. Set CYBERSENTINEL_CONTROL_PLANE_URL.'),
       { code: 'SERVICE_UNAVAILABLE', retryable: false }
-    );
-  }
-
-  if (deletion) {
-    throw Object.assign(
-      new Error('Delete-path (un-isolate / unlock) is not supported via direct API dispatch on this manager. Use the auto-expiry <timeout> on the AR <active-response> block instead, or wait for the paired-release command set to land. See backend/src/connectors/cybersentinel-response.connector.js for context.'),
-      { code: 'DELETE_PATH_UNSUPPORTED', retryable: false }
     );
   }
 
@@ -349,13 +343,7 @@ function classifyError(error, operation) {
 // CORE ACTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Modes that map an action to the AR "delete" path (un-isolate / unlock).
-const DELETION_MODES = new Set(['release', 'unisolate', 'unlock', 'enable', 'delete']);
-function isDeletionMode(mode) {
-  return typeof mode === 'string' && DELETION_MODES.has(mode.toLowerCase());
-}
-
-export async function isolate_host({ agent_id, mode = 'isolate', _simulate }) {
+export async function isolate_host({ agent_id, _simulate }) {
   const timestamp = new Date().toISOString();
 
   if (!agent_id || typeof agent_id !== 'string' || agent_id.trim() === '') {
@@ -370,16 +358,12 @@ export async function isolate_host({ agent_id, mode = 'isolate', _simulate }) {
   const agentReject = validateAgentId(cleanAgentId, 'isolate_host');
   if (agentReject) return agentReject;
 
-  const deletion = isDeletionMode(mode);
-  const opLabel = deletion ? 'release host' : 'isolate host';
-
   if (_simulate) {
-    logger.info(`[CyberSentinelResponse] SIMULATION: Would ${opLabel} ${cleanAgentId}`);
+    logger.info(`[CyberSentinelResponse] SIMULATION: Would isolate host ${cleanAgentId}`);
     return {
       success: true,
       agent_id: cleanAgentId,
       action: 'isolate_host',
-      mode: deletion ? 'release' : 'isolate',
       timestamp,
       enforced_by: 'CyberSentinel Manager',
       _simulated: true,
@@ -391,16 +375,14 @@ export async function isolate_host({ agent_id, mode = 'isolate', _simulate }) {
       action: 'isolate_host',
       args: [],   // manager IP is supplied by ossec.conf <extra_args>
       agentId: cleanAgentId,
-      deletion,
     });
 
-    logger.info(`[CyberSentinelResponse] ${opLabel} dispatched for ${cleanAgentId} (cmd=${result.command})`);
+    logger.info(`[CyberSentinelResponse] isolate host dispatched for ${cleanAgentId} (cmd=${result.command})`);
 
     return {
       success: true,
       agent_id: cleanAgentId,
       action: 'isolate_host',
-      mode: deletion ? 'release' : 'isolate',
       os: result.os,
       ar_command: result.command,
       timestamp,
@@ -409,13 +391,12 @@ export async function isolate_host({ agent_id, mode = 'isolate', _simulate }) {
       _simulated: false,
     };
   } catch (error) {
-    const classified = classifyError(error, opLabel);
-    logger.error(`[CyberSentinelResponse] ${opLabel} failed for ${cleanAgentId}: ${classified.message}`);
+    const classified = classifyError(error, 'isolate_host');
+    logger.error(`[CyberSentinelResponse] isolate_host failed for ${cleanAgentId}: ${classified.message}`);
     return {
       success: false,
       agent_id: cleanAgentId,
       action: 'isolate_host',
-      mode: deletion ? 'release' : 'isolate',
       error: classified.message,
       details: { code: classified.code, retryable: classified.retryable },
     };
@@ -498,7 +479,7 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
   }
 }
 
-export async function disable_user({ agent_id, username, mode = 'lock', _simulate }) {
+export async function disable_user({ agent_id, username, _simulate }) {
   const timestamp = new Date().toISOString();
 
   if (!agent_id || typeof agent_id !== 'string' || agent_id.trim() === '') {
@@ -521,16 +502,13 @@ export async function disable_user({ agent_id, username, mode = 'lock', _simulat
   if (agentReject) return agentReject;
 
   const cleanUsername = username.trim();
-  const deletion = isDeletionMode(mode);
-  const opLabel = deletion ? 'unlock user' : 'disable user';
 
   if (_simulate) {
-    logger.info(`[CyberSentinelResponse] SIMULATION: Would ${opLabel} ${cleanUsername} on ${cleanAgentId}`);
+    logger.info(`[CyberSentinelResponse] SIMULATION: Would disable user ${cleanUsername} on ${cleanAgentId}`);
     return {
       success: true,
       agent_id: cleanAgentId,
       action: 'disable_user',
-      mode: deletion ? 'unlock' : 'lock',
       username: cleanUsername,
       timestamp,
       enforced_by: 'CyberSentinel Manager',
@@ -543,16 +521,14 @@ export async function disable_user({ agent_id, username, mode = 'lock', _simulat
       action: 'disable_user',
       args: [cleanUsername],
       agentId: cleanAgentId,
-      deletion,
     });
 
-    logger.info(`[CyberSentinelResponse] ${opLabel} dispatched for ${cleanAgentId} (cmd=${result.command})`);
+    logger.info(`[CyberSentinelResponse] disable user dispatched for ${cleanAgentId} (cmd=${result.command})`);
 
     return {
       success: true,
       agent_id: cleanAgentId,
       action: 'disable_user',
-      mode: deletion ? 'unlock' : 'lock',
       username: cleanUsername,
       os: result.os,
       ar_command: result.command,
@@ -562,13 +538,12 @@ export async function disable_user({ agent_id, username, mode = 'lock', _simulat
       _simulated: false,
     };
   } catch (error) {
-    const classified = classifyError(error, opLabel);
-    logger.error(`[CyberSentinelResponse] ${opLabel} failed for ${cleanAgentId}: ${classified.message}`);
+    const classified = classifyError(error, 'disable_user');
+    logger.error(`[CyberSentinelResponse] disable_user failed for ${cleanAgentId}: ${classified.message}`);
     return {
       success: false,
       agent_id: cleanAgentId,
       action: 'disable_user',
-      mode: deletion ? 'unlock' : 'lock',
       username: cleanUsername,
       error: classified.message,
       details: { code: classified.code, retryable: classified.retryable },
@@ -584,9 +559,10 @@ export const cybersentinelResponseConnector = {
   inputSchema: {
     isolate_host: {
       required_fields: ['agent_id'],
-      optional_fields: ['mode'],
-      field_types: { agent_id: 'string', mode: 'string' },
-      // mode: 'isolate' (default) applies AR "add", 'release'/'unisolate'/'delete' applies AR "delete"
+      optional_fields: [],
+      field_types: { agent_id: 'string' },
+      // ADD-only. Release is driven by Wazuh native <timeout> auto-expiry
+      // on the manager's <active-response> block, NOT a separate SOAR step.
     },
     kill_process: {
       required_fields: ['agent_id'],
@@ -599,13 +575,12 @@ export const cybersentinelResponseConnector = {
     },
     disable_user: {
       required_fields: ['agent_id', 'username'],
-      optional_fields: ['mode'],
+      optional_fields: [],
       field_types: {
         agent_id: 'string',
         username: 'string',
-        mode: 'string',
       },
-      // mode: 'lock' (default) applies AR "add", 'unlock'/'enable'/'delete' applies AR "delete"
+      // ADD-only. Unlock is a manual SOC operator task, not a SOAR step.
     },
   },
 
@@ -660,7 +635,6 @@ export const cybersentinelResponseConnector = {
       case 'isolate_host':
         return await isolate_host({
           agent_id: inputs.agent_id,
-          mode: inputs.mode,
           _simulate: isSimulation,
         });
 
@@ -676,7 +650,6 @@ export const cybersentinelResponseConnector = {
         return await disable_user({
           agent_id: inputs.agent_id,
           username: inputs.username,
-          mode: inputs.mode,
           _simulate: isSimulation,
         });
 

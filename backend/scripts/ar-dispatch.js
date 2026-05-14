@@ -23,10 +23,13 @@
  * Usage:
  *   node backend/scripts/ar-dispatch.js kill_process    --agent 005 --pid 12345
  *   node backend/scripts/ar-dispatch.js kill_process    --agent 005 --name sleep
- *   node backend/scripts/ar-dispatch.js disable_user    --agent 005 --user soartest-linux --mode lock
- *   node backend/scripts/ar-dispatch.js disable_user    --agent 005 --user soartest-linux --mode unlock
- *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005 --mode isolate
- *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005 --mode release
+ *   node backend/scripts/ar-dispatch.js disable_user    --agent 005 --user soartest-linux
+ *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005
+ *
+ * All actions are ADD-path only. Release / unlock are NOT exposed:
+ *   - isolate_host release: handled by Wazuh native <timeout> auto-expiry
+ *     on the manager's <active-response> block.
+ *   - disable_user unlock:  manual SOC operator task, not a SOAR step.
  *
  * Add --simulate to skip the actual PUT (returns mock success).
  * Add --dry-run-preview to print the PUT body that WOULD be sent without
@@ -63,10 +66,7 @@ function previewPutBody(action, inputs) {
   const isWin = String(inputs.agent_id) === '007';   // hint for preview only
   const base = baseCommands[action];
   const cmd = isWin ? `win_${base}` : base;
-  const deletion = ['release', 'unisolate', 'unlock', 'enable', 'delete']
-    .includes(String(inputs.mode || '').toLowerCase());
   // Wazuh 4.14.x manual-dispatch API requires "!" prefix on every command.
-  // Delete-path is currently refused upstream by the connector — flagged in notes.
   const command = `!${cmd}`;
 
   let argsArr = [];
@@ -93,10 +93,12 @@ function previewPutBody(action, inputs) {
     notes: {
       os_lookup: 'GET /agents?agents_list=<id>&select=os.platform — fetched at dispatch time',
       windows_routing: 'preview assumes agent 007 = windows; live dispatch resolves via real OS lookup',
-      api_prefix: 'Wazuh 4.14.x API requires "!" prefix on every manual dispatch (verified empirically 2026-05-12)',
-      deletion_status: deletion
-        ? `WARNING: mode="${inputs.mode}" → DELETE-PATH currently UNSUPPORTED by connector. Will refuse with DELETE_PATH_UNSUPPORTED.`
-        : 'add path (default)',
+      api_prefix: 'Wazuh 4.14.x API requires "!" prefix on every manual dispatch (verified 2026-05-12)',
+      release_path: action === 'isolate_host'
+        ? 'NOTE: release is handled by Wazuh native <timeout> on the manager <active-response> block, not by SOAR.'
+        : action === 'disable_user'
+        ? 'NOTE: unlock is a manual SOC operator task, not exposed by this connector.'
+        : null,
     },
   };
 }
@@ -106,7 +108,7 @@ async function main() {
   if (!action || !['kill_process', 'disable_user', 'isolate_host'].includes(action)) {
     console.error('Usage: ar-dispatch.js <action> [flags]');
     console.error('  action: kill_process | disable_user | isolate_host');
-    console.error('Flags: --agent <id>  --pid <n>  --name <s>  --user <s>  --mode <lock|unlock|isolate|release>');
+    console.error('Flags: --agent <id>  --pid <n>  --name <s>  --user <s>');
     console.error('       --simulate         use the connector simulation path');
     console.error('       --dry-run-preview  print the PUT body shape only, no network');
     process.exit(2);
@@ -128,10 +130,11 @@ async function main() {
   if (action === 'disable_user') {
     if (!args.user) { console.error('--user <name> required for disable_user'); process.exit(2); }
     inputs.username = String(args.user);
-    inputs.mode = args.mode ? String(args.mode) : 'lock';
   }
-  if (action === 'isolate_host') {
-    inputs.mode = args.mode ? String(args.mode) : 'isolate';
+  // isolate_host: no extra args; release is handled by Wazuh <timeout> auto-expiry.
+  if (args.mode) {
+    console.error('--mode flag is no longer supported. Connector is ADD-only; release/unlock paths were removed per the 2026-05-14 design decision.');
+    process.exit(2);
   }
   if (args.simulate) inputs._simulate = true;
 

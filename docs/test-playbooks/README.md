@@ -5,19 +5,21 @@ platform against the manager on `192.168.1.222`.
 
 ## soar-ar-smoke-test-3.0.5.json
 
-8-step playbook that exercises every Active Response action across Linux
-and Windows agents that currently have SOAR AR scripts deployed.
+5-step playbook exercising every ADD-path Active Response action that SOAR
+supports across the deployed agents.
 
-> Windows isolate_host on agent 056 was originally steps 9 + 10 but is
-> deferred — AR scripts are not yet on that agent. Will be a second short
-> run after deployment.
+> Release / unlock paths are NOT in SOAR's contract (decision 2026-05-14):
+> - `isolate_host` release: handled by Wazuh native `<timeout>` auto-expiry
+>   on the manager's `<active-response>` block — no SOAR dispatch.
+> - `disable_user` unlock: manual SOC operator task, documented out of
+>   scope for automated playbooks.
 
-### Targets
+### Targets (5-step ADD-only matrix)
 
-| Agent ID | Name                       | OS      | Used in steps |
-|----------|----------------------------|---------|---------------|
-| 005      | Agent-70                   | Ubuntu  | 1, 2, 3, 7, 8 |
-| 007      | RootSeeker                 | Windows | 4, 5, 6       |
+| Agent ID | Name        | OS      | Used in steps |
+|----------|-------------|---------|---------------|
+| 005      | Agent-70    | Ubuntu  | 1, 2, 5       |
+| 007      | RootSeeker  | Windows | 3, 4          |
 
 ### Pre-flight setup (manager-side operator owns this)
 
@@ -91,13 +93,15 @@ manager-side operator gives you at run time):
 | Step | Command |
 |------|---------|
 | 1 | `docker exec soar-backend node /app/scripts/ar-dispatch.js kill_process --agent 005 --pid <LINUX_PID>` |
-| 2 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 005 --user soartest-linux --mode lock` |
-| 3 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 005 --user soartest-linux --mode unlock` |
-| 4 | `docker exec soar-backend node /app/scripts/ar-dispatch.js kill_process --agent 007 --pid <WIN_PID>` |
-| 5 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 007 --user soartest-win --mode lock` |
-| 6 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 007 --user soartest-win --mode unlock` |
-| 7 | `docker exec soar-backend node /app/scripts/ar-dispatch.js isolate_host --agent 005 --mode isolate` |
-| 8 | `docker exec soar-backend node /app/scripts/ar-dispatch.js isolate_host --agent 005 --mode release` |
+| 2 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 005 --user soartest-linux` |
+| 3 | `docker exec soar-backend node /app/scripts/ar-dispatch.js kill_process --agent 007 --pid <WIN_PID>` |
+| 4 | `docker exec soar-backend node /app/scripts/ar-dispatch.js disable_user --agent 007 --user soartest-win` |
+| 5 | `docker exec soar-backend node /app/scripts/ar-dispatch.js isolate_host --agent 005` |
+
+> Step 5 prerequisite: the manager-side operator must temporarily set
+> `<timeout>60</timeout>` (or similar) on the soar-isolate-host0
+> `<active-response>` block before dispatch, so Wazuh auto-releases the
+> isolation. After validation, revert to `<timeout>0</timeout>`.
 
 Expected agent-side log line per step:
 
@@ -105,12 +109,9 @@ Expected agent-side log line per step:
 |------|-----------------------------------------------------------------------------------------------|
 | 1    | `cybersentinel-soar-kill-process: Killed PID <n> (sleep)` on 005                              |
 | 2    | `cybersentinel-soar-disable-user: User 'soartest-linux' locked successfully` on 005           |
-| 3    | `cybersentinel-soar-disable-user: User 'soartest-linux' unlocked successfully` on 005         |
-| 4    | `cybersentinel-soar-kill-process: Killed PID <n> (notepad)` on 007                            |
-| 5    | `cybersentinel-soar-disable-user: Account 'soartest-win' locked successfully` on 007          |
-| 6    | `cybersentinel-soar-disable-user: Account 'soartest-win' unlocked successfully` on 007        |
-| 7    | `cybersentinel-soar-isolate-host: Isolation applied (manager=192.168.1.222 whitelisted)` on 005 |
-| 8    | `cybersentinel-soar-isolate-host: Isolation removed` on 005                                   |
+| 3    | `cybersentinel-soar-kill-process: Killed PID <n> (notepad)` on 007                            |
+| 4    | `cybersentinel-soar-disable-user: Account 'soartest-win' locked successfully` on 007          |
+| 5    | `cybersentinel-soar-isolate-host: Isolation applied (manager=192.168.1.222 whitelisted)` + auto `Isolation removed` ~60s later on 005 |
 
 ### Step ordering rationale
 
