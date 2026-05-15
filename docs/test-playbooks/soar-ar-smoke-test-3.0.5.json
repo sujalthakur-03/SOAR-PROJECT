@@ -66,11 +66,13 @@
       {
         "step_id": "step_05_linux_isolate_host",
         "type": "action",
-        "name": "Linux isolate_host on agent 005 (auto-release via manager <timeout>)",
+        "name": "Linux isolate_host on agent 005 (auto-release after 30 min)",
+        "description": "Connector schedules an explicit delete dispatch at T+30min via setTimeout. Pending releases are in-memory; backend restart loses them. Set release_after_minutes=null (or omit) for permanent isolation requiring manual SOC clear.",
         "connector_id": "cybersentinel_response",
         "action_type": "isolate_host",
         "parameters": {
-          "agent_id": "005"
+          "agent_id": "005",
+          "release_after_minutes": 30
         },
         "on_success": "__END__",
         "on_failure": "stop"

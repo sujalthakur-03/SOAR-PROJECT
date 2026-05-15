@@ -25,11 +25,15 @@
  *   node backend/scripts/ar-dispatch.js kill_process    --agent 005 --name sleep
  *   node backend/scripts/ar-dispatch.js disable_user    --agent 005 --user soartest-linux
  *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005
+ *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005 --release-after-minutes 30
+ *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005 --release-after-seconds 60
  *
- * All actions are ADD-path only. Release / unlock are NOT exposed:
- *   - isolate_host release: handled by Wazuh native <timeout> auto-expiry
- *     on the manager's <active-response> block.
- *   - disable_user unlock:  manual SOC operator task, not a SOAR step.
+ * isolate_host release: scheduled by the connector via setTimeout. Send
+ *   --release-after-minutes (preferred) or --release-after-seconds. Max 24h.
+ *   If omitted, isolation is permanent until a SOC operator manually clears
+ *   the iptables chain on the agent.
+ *
+ * disable_user unlock: manual SOC operator task, not exposed.
  *
  * Add --simulate to skip the actual PUT (returns mock success).
  * Add --dry-run-preview to print the PUT body that WOULD be sent without
@@ -135,9 +139,16 @@ async function main() {
     if (!args.user) { console.error('--user <name> required for disable_user'); process.exit(2); }
     inputs.username = String(args.user);
   }
-  // isolate_host: no extra args; release is handled by Wazuh <timeout> auto-expiry.
+  if (action === 'isolate_host') {
+    if (args['release-after-minutes'] !== undefined) {
+      inputs.release_after_minutes = parseFloat(args['release-after-minutes']);
+    }
+    if (args['release-after-seconds'] !== undefined) {
+      inputs.release_after_seconds = parseFloat(args['release-after-seconds']);
+    }
+  }
   if (args.mode) {
-    console.error('--mode flag is no longer supported. Connector is ADD-only; release/unlock paths were removed per the 2026-05-14 design decision.');
+    console.error('--mode flag is no longer supported. Use --release-after-minutes for scheduled isolation release.');
     process.exit(2);
   }
   if (args.simulate) inputs._simulate = true;

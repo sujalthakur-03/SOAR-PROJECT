@@ -368,10 +368,99 @@ function classifyError(error, operation) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SCHEDULED ISOLATION-RELEASE (Option 1 — connector-side scheduled delete)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Wazuh's <timeout> auto-release does NOT fire for API-dispatched AR because
+// our scripts don't perform the alert-keys handshake (verified 2026-05-15).
+// Instead, the connector schedules an explicit delete dispatch after N
+// seconds. The delete dispatch is the SAME command name (!soar-isolate-host0
+// / win_soar-isolate-host0) with a "delete" sentinel as the 2nd arg, which
+// the agent script detects and routes to its existing delete branch.
+//
+// Limitations:
+//   1. Scheduled releases are in-memory only. Backend restart loses pending
+//      schedules. Future hardening: persist to MongoDB and rehydrate on
+//      startup.
+//   2. Maximum release window: 24h. Beyond that needs an external scheduler.
+//   3. If the same agent gets a second isolate dispatch while a release is
+//      already scheduled, the prior schedule is cancelled and replaced
+//      (latest dispatch wins).
+
+const MAX_RELEASE_SECONDS = 24 * 60 * 60;
+const scheduledReleases = new Map();    // agentId -> { timeoutId, scheduledAt, secondsRequested }
+
+function parseReleaseSeconds({ release_after_seconds, release_after_minutes }) {
+  // seconds wins if both set
+  const candidates = [
+    { value: release_after_seconds, multiplier: 1, name: 'release_after_seconds' },
+    { value: release_after_minutes, multiplier: 60, name: 'release_after_minutes' },
+  ];
+  for (const c of candidates) {
+    if (c.value === undefined || c.value === null || c.value === '') continue;
+    const n = typeof c.value === 'number' ? c.value : parseFloat(c.value);
+    if (!Number.isFinite(n) || n <= 0) {
+      return { error: `${c.name} must be a positive number, got: ${JSON.stringify(c.value)}` };
+    }
+    return { seconds: Math.min(Math.floor(n * c.multiplier), MAX_RELEASE_SECONDS) };
+  }
+  return { seconds: 0 };
+}
+
+function cancelScheduledRelease(agentId) {
+  const entry = scheduledReleases.get(agentId);
+  if (entry) {
+    clearTimeout(entry.timeoutId);
+    scheduledReleases.delete(agentId);
+    logger.info(`[CyberSentinelResponse] Cancelled prior scheduled release for agent ${agentId} (was at ${entry.scheduledAt.toISOString()})`);
+  }
+}
+
+function scheduleIsolationRelease(agentId, managerIp, seconds) {
+  cancelScheduledRelease(agentId);
+
+  const scheduledAt = new Date(Date.now() + seconds * 1000);
+  logger.info(`[CyberSentinelResponse] Scheduling isolation release for agent ${agentId} at ${scheduledAt.toISOString()} (T+${seconds}s)`);
+
+  const timeoutId = setTimeout(async () => {
+    scheduledReleases.delete(agentId);
+    logger.info(`[CyberSentinelResponse] Firing scheduled isolation release for agent ${agentId}`);
+    try {
+      const result = await dispatchAR({
+        action: 'isolate_host',
+        // [managerIp, "delete"] — agent script reads extra_args[1] for the
+        // delete sentinel and routes to its release branch. Agreed protocol
+        // with backend Claude on 2026-05-15.
+        args: [managerIp, 'delete'],
+        agentId,
+      });
+      const affected = result.data?.data?.affected_items || [];
+      logger.info(`[CyberSentinelResponse] Scheduled release dispatched for agent ${agentId}: affected=${JSON.stringify(affected)}`);
+    } catch (err) {
+      logger.error(`[CyberSentinelResponse] Scheduled release FAILED for agent ${agentId}: ${err.message}`);
+    }
+  }, seconds * 1000);
+
+  scheduledReleases.set(agentId, { timeoutId, scheduledAt, secondsRequested: seconds });
+  return scheduledAt;
+}
+
+/**
+ * Read-only accessor for SOC dashboard / debugging.
+ */
+export function listScheduledIsolationReleases() {
+  return Array.from(scheduledReleases.entries()).map(([agentId, e]) => ({
+    agent_id: agentId,
+    scheduled_at: e.scheduledAt.toISOString(),
+    seconds_requested: e.secondsRequested,
+  }));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // CORE ACTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export async function isolate_host({ agent_id, _simulate }) {
+export async function isolate_host({ agent_id, release_after_seconds, release_after_minutes, _simulate }) {
   const timestamp = new Date().toISOString();
 
   if (!agent_id || typeof agent_id !== 'string' || agent_id.trim() === '') {
@@ -386,14 +475,32 @@ export async function isolate_host({ agent_id, _simulate }) {
   const agentReject = validateAgentId(cleanAgentId, 'isolate_host');
   if (agentReject) return agentReject;
 
+  // Validate release-after inputs before dispatching the ADD
+  const releaseParsed = parseReleaseSeconds({ release_after_seconds, release_after_minutes });
+  if (releaseParsed.error) {
+    return {
+      success: false,
+      agent_id: cleanAgentId,
+      action: 'isolate_host',
+      error: releaseParsed.error,
+      details: { code: 'INVALID_INPUT', retryable: false },
+    };
+  }
+  const releaseSeconds = releaseParsed.seconds;
+
   if (_simulate) {
-    logger.info(`[CyberSentinelResponse] SIMULATION: Would isolate host ${cleanAgentId}`);
+    const simScheduledAt = releaseSeconds > 0
+      ? new Date(Date.now() + releaseSeconds * 1000).toISOString()
+      : null;
+    logger.info(`[CyberSentinelResponse] SIMULATION: Would isolate host ${cleanAgentId}${releaseSeconds ? ` (auto-release at ${simScheduledAt})` : ''}`);
     return {
       success: true,
       agent_id: cleanAgentId,
       action: 'isolate_host',
       timestamp,
       enforced_by: 'CyberSentinel Manager',
+      scheduled_release_at: simScheduledAt,
+      release_after_seconds: releaseSeconds || null,
       _simulated: true,
     };
   }
@@ -423,6 +530,12 @@ export async function isolate_host({ agent_id, _simulate }) {
 
     logger.info(`[CyberSentinelResponse] isolate host dispatched for ${cleanAgentId} (cmd=${result.command}, manager_ip=${managerIp})`);
 
+    // Only schedule the release after the ADD has been accepted by the manager.
+    let scheduledReleaseAt = null;
+    if (releaseSeconds > 0) {
+      scheduledReleaseAt = scheduleIsolationRelease(cleanAgentId, managerIp, releaseSeconds).toISOString();
+    }
+
     return {
       success: true,
       agent_id: cleanAgentId,
@@ -431,6 +544,8 @@ export async function isolate_host({ agent_id, _simulate }) {
       ar_command: result.command,
       timestamp,
       enforced_by: 'CyberSentinel Manager',
+      scheduled_release_at: scheduledReleaseAt,
+      release_after_seconds: releaseSeconds || null,
       details: result.data?.data || null,
       _simulated: false,
     };
@@ -603,10 +718,17 @@ export const cybersentinelResponseConnector = {
   inputSchema: {
     isolate_host: {
       required_fields: ['agent_id'],
-      optional_fields: [],
-      field_types: { agent_id: 'string' },
-      // ADD-only. Release is driven by Wazuh native <timeout> auto-expiry
-      // on the manager's <active-response> block, NOT a separate SOAR step.
+      optional_fields: ['release_after_minutes', 'release_after_seconds'],
+      field_types: {
+        agent_id: 'string',
+        release_after_minutes: 'number',
+        release_after_seconds: 'number',
+      },
+      // If release_after_minutes (or release_after_seconds) is set and > 0,
+      // the connector schedules a delete dispatch after that many seconds.
+      // The release is in-memory only — backend restart cancels pending
+      // schedules. Max 24h. If omitted, isolation is permanent until a
+      // SOC operator manually clears the iptables chain on the agent.
     },
     kill_process: {
       required_fields: ['agent_id'],
@@ -638,6 +760,8 @@ export const cybersentinelResponseConnector = {
         ar_command: 'string',
         timestamp: 'string',
         enforced_by: 'string',
+        scheduled_release_at: 'string',
+        release_after_seconds: 'number',
         _simulated: 'boolean',
       },
     },
@@ -679,6 +803,8 @@ export const cybersentinelResponseConnector = {
       case 'isolate_host':
         return await isolate_host({
           agent_id: inputs.agent_id,
+          release_after_minutes: inputs.release_after_minutes,
+          release_after_seconds: inputs.release_after_seconds,
           _simulate: isSimulation,
         });
 
