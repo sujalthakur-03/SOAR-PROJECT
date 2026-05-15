@@ -75,7 +75,11 @@ function previewPutBody(action, inputs) {
   } else if (action === 'disable_user') {
     argsArr = [String(inputs.username)];
   } else if (action === 'isolate_host') {
-    argsArr = [];   // manager IP comes from ossec.conf <extra_args>
+    // API-dispatched AR does NOT inherit manager ossec.conf <extra_args>.
+    // Manager IP is passed explicitly in the API body's arguments array.
+    const mgrIp = (process.env.CYBERSENTINEL_MANAGER_IP || '').trim()
+      || (() => { try { return new URL(process.env.CYBERSENTINEL_CONTROL_PLANE_URL).hostname; } catch { return '<MANAGER_IP>'; } })();
+    argsArr = [mgrIp];
   }
 
   return {

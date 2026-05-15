@@ -58,6 +58,31 @@ function getControlPlaneConfig() {
   };
 }
 
+/**
+ * Resolve the manager IP the agent's isolate-host script needs to whitelist.
+ *
+ * Verified 2026-05-14: Wazuh's PUT /active-response API does NOT auto-merge
+ * <extra_args> from manager ossec.conf into the agent's parameters.extra_args
+ * — that propagation only happens for rule-triggered AR. So API-triggered
+ * isolate-host MUST pass the manager IP explicitly in the request body's
+ * `arguments` array, where it lands on the agent as parameters.extra_args[0].
+ *
+ * Precedence:
+ *   1. CYBERSENTINEL_MANAGER_IP env var (set explicitly for HA / NAT setups
+ *      where the AR-allowed IP differs from the API hostname)
+ *   2. Hostname parsed from CYBERSENTINEL_CONTROL_PLANE_URL
+ */
+function getManagerIp() {
+  const explicit = (process.env.CYBERSENTINEL_MANAGER_IP || '').trim();
+  if (explicit) return explicit;
+  const url = process.env.CYBERSENTINEL_CONTROL_PLANE_URL || '';
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
 const httpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const API_TIMEOUT_MS = 30000;
 
@@ -211,8 +236,11 @@ async function getAgentOS(agentId, token, config) {
  * PUT /active-response?agents_list=<id>
  * Body: { command, arguments, alert }
  *
- * The manager bundles its ossec.conf <extra_args> with the API `arguments`
- * and forwards the combined list to the agent script as parameters.extra_args.
+ * The manager forwards `arguments` LITERALLY to the agent script as
+ * parameters.extra_args. Note: API-dispatched AR does NOT inherit
+ * <extra_args> from manager ossec.conf (only rule-triggered AR does), so
+ * every argument the agent script reads must be passed in this `arguments`
+ * array — see getManagerIp() for the isolate-host case.
  *
  * COMMAND-NAME FORMAT (verified empirically against Wazuh 4.14.x dev manager
  * on 192.168.1.222 — May 2026):
@@ -370,14 +398,30 @@ export async function isolate_host({ agent_id, _simulate }) {
     };
   }
 
+  // CRITICAL: API-dispatched AR does NOT inherit <extra_args> from manager
+  // ossec.conf — only rule-triggered AR does. The manager IP must be passed
+  // explicitly in the PUT body's `arguments` array, which the agent receives
+  // as parameters.extra_args. The isolate-host script reads extra_args[0]
+  // for the manager IP to whitelist before applying iptables DROP rules.
+  const managerIp = getManagerIp();
+  if (!managerIp) {
+    return {
+      success: false,
+      agent_id: cleanAgentId,
+      action: 'isolate_host',
+      error: 'Manager IP is not configured. Set CYBERSENTINEL_MANAGER_IP or ensure CYBERSENTINEL_CONTROL_PLANE_URL has a parseable hostname.',
+      details: { code: 'MISSING_MANAGER_IP', retryable: false },
+    };
+  }
+
   try {
     const result = await dispatchAR({
       action: 'isolate_host',
-      args: [],   // manager IP is supplied by ossec.conf <extra_args>
+      args: [managerIp],   // passed to agent as parameters.extra_args[0]
       agentId: cleanAgentId,
     });
 
-    logger.info(`[CyberSentinelResponse] isolate host dispatched for ${cleanAgentId} (cmd=${result.command})`);
+    logger.info(`[CyberSentinelResponse] isolate host dispatched for ${cleanAgentId} (cmd=${result.command}, manager_ip=${managerIp})`);
 
     return {
       success: true,
