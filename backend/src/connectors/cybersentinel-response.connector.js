@@ -179,6 +179,27 @@ function validateAgentId(agentId, action) {
   return null;
 }
 
+/**
+ * Coerce agent_id to its canonical Wazuh form: a 3-digit zero-padded string.
+ *
+ * The playbook engine's input resolver auto-casts numeric-looking strings to
+ * numbers (e.g. DSL "005" → resolveValue → 5). We need to re-string and
+ * re-pad before the manager API call so the dispatch targets the right agent.
+ * Non-numeric agent IDs (rare but legal) pass through untouched after a
+ * String() + trim().
+ *
+ * Returns null when the input is missing/empty.
+ */
+function normalizeAgentId(raw) {
+  if (raw === undefined || raw === null) return null;
+  let id = String(raw).trim();
+  if (id === '') return null;
+  if (/^\d+$/.test(id) && id.length < 3) {
+    id = id.padStart(3, '0');
+  }
+  return id;
+}
+
 function classifyOSPlatform(platform) {
   const p = String(platform || '').toLowerCase();
   if (WINDOWS_PLATFORMS.has(p)) return 'windows';
@@ -463,7 +484,8 @@ export function listScheduledIsolationReleases() {
 export async function isolate_host({ agent_id, release_after_seconds, release_after_minutes, _simulate }) {
   const timestamp = new Date().toISOString();
 
-  if (!agent_id || typeof agent_id !== 'string' || agent_id.trim() === '') {
+  const cleanAgentId = normalizeAgentId(agent_id);
+  if (!cleanAgentId) {
     return {
       success: false,
       error: 'agent_id is required for isolate_host',
@@ -471,7 +493,6 @@ export async function isolate_host({ agent_id, release_after_seconds, release_af
     };
   }
 
-  const cleanAgentId = agent_id.trim();
   const agentReject = validateAgentId(cleanAgentId, 'isolate_host');
   if (agentReject) return agentReject;
 
@@ -565,7 +586,8 @@ export async function isolate_host({ agent_id, release_after_seconds, release_af
 export async function kill_process({ agent_id, process_name, pid, _simulate }) {
   const timestamp = new Date().toISOString();
 
-  if (!agent_id || typeof agent_id !== 'string' || agent_id.trim() === '') {
+  const cleanAgentIdEarly = normalizeAgentId(agent_id);
+  if (!cleanAgentIdEarly) {
     return {
       success: false,
       error: 'agent_id is required for kill_process',
@@ -580,7 +602,7 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
     };
   }
 
-  const cleanAgentId = agent_id.trim();
+  const cleanAgentId = cleanAgentIdEarly;
   const agentReject = validateAgentId(cleanAgentId, 'kill_process');
   if (agentReject) return agentReject;
 
@@ -641,14 +663,16 @@ export async function kill_process({ agent_id, process_name, pid, _simulate }) {
 export async function disable_user({ agent_id, username, _simulate }) {
   const timestamp = new Date().toISOString();
 
-  if (!agent_id || typeof agent_id !== 'string' || agent_id.trim() === '') {
+  const cleanAgentId = normalizeAgentId(agent_id);
+  if (!cleanAgentId) {
     return {
       success: false,
       error: 'agent_id is required for disable_user',
       details: { code: 'INVALID_INPUT' },
     };
   }
-  if (!username || typeof username !== 'string' || username.trim() === '') {
+  const cleanUsernameEarly = (username === undefined || username === null) ? '' : String(username).trim();
+  if (!cleanUsernameEarly) {
     return {
       success: false,
       error: 'username is required for disable_user',
@@ -656,11 +680,10 @@ export async function disable_user({ agent_id, username, _simulate }) {
     };
   }
 
-  const cleanAgentId = agent_id.trim();
   const agentReject = validateAgentId(cleanAgentId, 'disable_user');
   if (agentReject) return agentReject;
 
-  const cleanUsername = username.trim();
+  const cleanUsername = cleanUsernameEarly;
 
   if (_simulate) {
     logger.info(`[CyberSentinelResponse] SIMULATION: Would disable user ${cleanUsername} on ${cleanAgentId}`);
@@ -720,7 +743,11 @@ export const cybersentinelResponseConnector = {
       required_fields: ['agent_id'],
       optional_fields: ['release_after_minutes', 'release_after_seconds'],
       field_types: {
-        agent_id: 'string',
+        // agent_id intentionally NOT typed here: the engine's input resolver
+        // auto-casts numeric-looking DSL strings ("005") to numbers (5) before
+        // engine-level type validation, which would falsely fail a 'string'
+        // typed field. The connector's normalizeAgentId() handles coercion
+        // and zero-padding internally.
         release_after_minutes: 'number',
         release_after_seconds: 'number',
       },
@@ -734,8 +761,8 @@ export const cybersentinelResponseConnector = {
       required_fields: ['agent_id'],
       optional_fields: ['pid', 'process_name'],
       field_types: {
-        agent_id: 'string',
-        pid: 'string',
+        // agent_id / pid intentionally untyped (see isolate_host note).
+        // process_name is always operator-supplied text, not numeric.
         process_name: 'string',
       },
     },
@@ -743,7 +770,7 @@ export const cybersentinelResponseConnector = {
       required_fields: ['agent_id', 'username'],
       optional_fields: [],
       field_types: {
-        agent_id: 'string',
+        // agent_id intentionally untyped (see isolate_host note).
         username: 'string',
       },
       // ADD-only. Unlock is a manual SOC operator task, not a SOAR step.

@@ -41,7 +41,7 @@
  */
 
 import 'dotenv/config';
-import { cybersentinelResponseConnector } from '../src/connectors/cybersentinel-response.connector.js';
+import { cybersentinelResponseConnector, listScheduledIsolationReleases } from '../src/connectors/cybersentinel-response.connector.js';
 
 function parseArgs(argv) {
   const args = {};
@@ -173,6 +173,22 @@ async function main() {
     duration_ms: durationMs,
     result,
   }, null, 2));
+
+  // The scheduled-release setTimeout lives in THIS process's event loop.
+  // If we exit immediately the timer dies before firing. Wait for any
+  // pending releases to fire, plus a small buffer for the dispatch HTTP
+  // round-trip.
+  const pending = listScheduledIsolationReleases();
+  if (pending.length > 0) {
+    const now = Date.now();
+    const longestFireInMs = Math.max(...pending.map(p => new Date(p.scheduled_at).getTime() - now));
+    const waitMs = Math.max(longestFireInMs + 10_000, 5_000);
+    const waitSec = Math.ceil(waitMs / 1000);
+    console.log(`[ar-dispatch] ${pending.length} scheduled release(s) pending. Keeping process alive ~${waitSec}s for the timer to fire (and ~10s buffer for the dispatch HTTP round-trip).`);
+    pending.forEach(p => console.log(`              agent=${p.agent_id}  fires_at=${p.scheduled_at}  T+${p.seconds_requested}s`));
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+    console.log(`[ar-dispatch] Wait window elapsed. Scheduled release dispatch result is in soar-backend logs (grep "Scheduled release dispatched").`);
+  }
 
   process.exit(result.success ? 0 : 1);
 }
