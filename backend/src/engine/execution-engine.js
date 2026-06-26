@@ -31,6 +31,7 @@ import { incrementMetric } from '../services/metrics-service.js';
 import { invokeConnector } from './connector-interface.js';
 import { resolveInputs, evaluateCondition, renderTemplate } from './input-resolver.js';
 import { validatePlaybookOrThrow } from './playbook-validator.js';
+import { normalizeBranchTargets } from './branch-targets.js';
 import logger from '../utils/logger.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -238,6 +239,29 @@ export class ExecutionEngine {
     // ═══════════════════════════════════════════════════════════════════════════
     this.stepExecutionCount = 0;
     this.maxStepExecutions = MAX_STEP_EXECUTIONS;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PARALLEL FAN-OUT: serialize mongoose .save() on the Execution document.
+    // Multiple in-flight branches can both attempt to mutate execution.steps[i]
+    // and call .save() concurrently — mongoose throws "Can't save() the same
+    // doc multiple times in parallel". This chain enforces one save at a time
+    // without blocking the actual step work, which runs concurrently in the
+    // scheduler.
+    // ═══════════════════════════════════════════════════════════════════════════
+    this._saveChain = Promise.resolve();
+  }
+
+  /**
+   * Serialize execution.save() calls behind a per-engine chain so concurrent
+   * branch writes don't trip mongoose's "save in parallel" guard. Returns a
+   * promise that resolves once this caller's save has run.
+   */
+  _saveExecution() {
+    const next = this._saveChain
+      .catch(() => {})              // don't propagate a prior save's error to the next caller
+      .then(() => this.execution.save());
+    this._saveChain = next;
+    return next;
   }
 
   /**
@@ -260,114 +284,147 @@ export class ExecutionEngine {
   }
 
   /**
-   * Main execution loop (HARDENED)
+   * Main execution loop (HARDENED) — PARALLEL FAN-OUT SCHEDULER
    *
    * HARDENING FEATURES:
-   * 1. Loop detection: Tracks step execution count, fails on MAX_STEP_EXECUTIONS
-   * 2. Condition termination: Condition steps MUST branch, no fall-through
-   * 3. Explicit step navigation: Uses nextStepId from step result, not index++
+   * 1. Loop detection: Tracks TOTAL step execution count across all branches,
+   *    fails on MAX_STEP_EXECUTIONS
+   * 2. Condition termination: Condition steps MUST branch (validated upstream
+   *    and re-enforced at runtime)
+   * 3. Explicit step navigation: Uses nextStepIds[] (array) from step result;
+   *    string-form legacy data is normalized at the executeStep boundary
+   *
+   * FAN-OUT SEMANTICS:
+   * - Multiple successors run in parallel (pendingIds + runningPromises set)
+   * - Fail-fast: any branch failure aborts the rest after drain
+   * - __END__ targets terminate their own branch only
+   * - 'fail' targets trigger fail-fast
+   * - Approval steps suspend their branch (terminate=true); resume seeds new
+   *   pending IDs via the optional `seedStepIds` parameter
+   *
+   * BACKWARD COMPATIBILITY:
+   * - Linear single-target playbooks (PB-AUTO-8C439D, etc.) execute the same
+   *   way: pending has 1 entry, running has 1 entry, scheduler walks them
+   *   one at a time. No fan-out, no race effect.
+   *
+   * @param {string[]|null} seedStepIds - Optional seed for the pending queue.
+   *   Used by approval-resume handlers to restart from a specific successor.
+   *   If null, the first step in the playbook is seeded.
    */
-  async execute() {
-    logger.info(`[ExecutionEngine] Starting execution ${this.execution.execution_id}`);
+  async execute(seedStepIds = null) {
+    const isResume = Array.isArray(seedStepIds) && seedStepIds.length > 0;
+    logger.info(`[ExecutionEngine] ${isResume ? 'Resuming' : 'Starting'} execution ${this.execution.execution_id}${isResume ? ` from ${JSON.stringify(seedStepIds)}` : ''}`);
 
-    await this.emitAuditEvent('execution.started', {
-      playbook_id: this.playbook.playbook_id,
-      playbook_name: this.playbook.name,
-      shadow_mode: this.shadowMode
-    });
-
-    await incrementMetric('executions_started');
+    if (!isResume) {
+      await this.emitAuditEvent('execution.started', {
+        playbook_id: this.playbook.playbook_id,
+        playbook_name: this.playbook.name,
+        shadow_mode: this.shadowMode
+      });
+      await incrementMetric('executions_started');
+    }
 
     const steps = this.playbook.steps;
-    let stepIndex = 0;
+    const stepsById = new Map(steps.map((s) => [s.step_id, s]));
 
-    try {
-      while (stepIndex < steps.length) {
-        const step = steps[stepIndex];
-        this.currentStepIndex = stepIndex;
+    // Pending queue: step IDs waiting to launch.
+    const pendingIds = isResume
+      ? [...seedStepIds]
+      : (steps.length > 0 ? [steps[0].step_id] : []);
 
-        // ═══════════════════════════════════════════════════════════════════════
-        // HARDENING #2: Loop detection - check execution count
-        // ═══════════════════════════════════════════════════════════════════════
-        this.stepExecutionCount++;
+    // In-flight steps: Map<step_id, Promise> for the race loop.
+    const runningPromises = new Map();
+    let failError = null;
 
-        if (this.stepExecutionCount > this.maxStepExecutions) {
-          const loopError = new Error(
-            `Execution loop detected: exceeded ${this.maxStepExecutions} step executions. ` +
-            `Last step: ${step.step_id}. Check for circular goto/branching.`
-          );
-          loopError.code = 'LOOP_DETECTED';
-
-          logger.error(`[ExecutionEngine] LOOP DETECTED in execution ${this.execution.execution_id}`);
-
-          await this.emitAuditEvent('execution.loop_detected', {
-            step_id: step.step_id,
-            step_execution_count: this.stepExecutionCount,
-            max_allowed: this.maxStepExecutions
-          });
-
-          await incrementMetric('executions_loop_detected');
-
-          throw loopError;
-        }
-
-        // Execute step with timeout protection
-        const stepTimeout = step.timeout_seconds
-          ? step.timeout_seconds * 1000
-          : STEP_TIMEOUT_MS;
-        const result = await withTimeout(
-          this.executeStep(step, stepIndex),
-          stepTimeout,
-          step.step_id
-        );
-
-        if (result.terminate) {
-          // Execution ended (success or failure)
-          break;
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // HARDENING #1: Condition step termination - NO fall-through
-        // ═══════════════════════════════════════════════════════════════════════
-        if (step.type === 'condition') {
-          // Condition steps MUST provide nextStepId (from on_true/on_false)
-          // If nextStepId is null here, it's a validation failure that slipped through
-          if (!result.nextStepId) {
-            const error = new Error(
-              `Condition step ${step.step_id} did not provide branch target. ` +
-              `Condition steps MUST always branch via on_true/on_false.`
-            );
-            error.code = 'CONDITION_NO_BRANCH';
-            throw error;
-          }
-        }
-
-        if (result.nextStepId) {
-          // Handle special __END__ step ID
-          if (result.nextStepId === STEP_END) {
-            logger.info(`[ExecutionEngine] Reached __END__, completing execution`);
-            await this.transitionState(ExecutionState.COMPLETED);
-            break;
-          }
-
-          // Jump to specific step
-          const nextIndex = steps.findIndex(s => s.step_id === result.nextStepId);
-          if (nextIndex === -1) {
-            throw new Error(`Step not found: ${result.nextStepId}`);
-          }
-          stepIndex = nextIndex;
-        } else {
-          // Continue to next sequential step (only for non-condition steps)
-          stepIndex++;
-        }
+    const launchStep = (stepId) => {
+      // Terminal sentinels: do not launch.
+      if (stepId === STEP_END) return;
+      if (stepId === 'fail') {
+        failError = Object.assign(new Error(`Branch resolved to 'fail' sentinel`), { code: 'BRANCH_FAILED' });
+        return;
       }
 
-      // Check if all steps completed
+      const step = stepsById.get(stepId);
+      if (!step) {
+        failError = new Error(`Step not found: ${stepId}`);
+        return;
+      }
+
+      // Loop detection — total across all branches.
+      this.stepExecutionCount++;
+      if (this.stepExecutionCount > this.maxStepExecutions) {
+        const loopError = new Error(
+          `Execution loop detected: exceeded ${this.maxStepExecutions} step executions. ` +
+          `Last step: ${stepId}. Check for circular goto/branching.`
+        );
+        loopError.code = 'LOOP_DETECTED';
+        logger.error(`[ExecutionEngine] LOOP DETECTED in execution ${this.execution.execution_id}`);
+        // Emit audit fire-and-forget (we're inside a sync section of the loop)
+        this.emitAuditEvent('execution.loop_detected', {
+          step_id: stepId,
+          step_execution_count: this.stepExecutionCount,
+          max_allowed: this.maxStepExecutions
+        }).catch(() => {});
+        incrementMetric('executions_loop_detected').catch(() => {});
+        failError = loopError;
+        return;
+      }
+
+      const stepIndex = steps.findIndex((s) => s.step_id === stepId);
+      const stepTimeout = step.timeout_seconds ? step.timeout_seconds * 1000 : STEP_TIMEOUT_MS;
+
+      const p = withTimeout(this.executeStep(step, stepIndex), stepTimeout, stepId)
+        .then((result) => {
+          runningPromises.delete(stepId);
+          if (failError) return;            // another branch already failed
+          if (result.terminate) return;     // approval pause — no successors
+
+          const successors = Array.isArray(result.nextStepIds) && result.nextStepIds.length > 0
+            ? result.nextStepIds
+            : (result.nextStepId ? [result.nextStepId] : []);
+
+          for (const next of successors) {
+            if (next === STEP_END) continue;
+            if (next === 'fail') {
+              failError = Object.assign(
+                new Error(`Branch from step ${stepId} resolved to 'fail' sentinel`),
+                { code: 'BRANCH_FAILED' }
+              );
+              return;
+            }
+            pendingIds.push(next);
+          }
+        })
+        .catch((err) => {
+          runningPromises.delete(stepId);
+          if (!failError) failError = err;
+        });
+
+      runningPromises.set(stepId, p);
+    };
+
+    try {
+      while ((pendingIds.length > 0 || runningPromises.size > 0) && !failError) {
+        // Launch every currently-pending step (parallel fan-out).
+        while (pendingIds.length > 0 && !failError) {
+          launchStep(pendingIds.shift());
+        }
+        if (failError || runningPromises.size === 0) break;
+        // Wait for at least one branch to advance.
+        await Promise.race([...runningPromises.values()]);
+      }
+
+      // If a branch failed, drain in-flight before reporting.
+      if (failError) {
+        await Promise.allSettled([...runningPromises.values()]);
+        throw failError;
+      }
+
+      // All branches finished cleanly.
       if (!this.execution.state.match(/FAILED|WAITING_APPROVAL/)) {
         await this.transitionState(ExecutionState.COMPLETED);
         await incrementMetric('executions_completed');
       }
-
     } catch (error) {
       logger.error(`[ExecutionEngine] Execution failed: ${error.message}`);
       await this.failExecution(error);
@@ -377,11 +434,18 @@ export class ExecutionEngine {
   }
 
   /**
-   * Execute a single step
+   * Execute a single step. Returns:
+   *   { terminate: bool, nextStepIds: string[], nextStepId?: string }
+   *
+   * nextStepIds is the canonical fan-out output (string[] of step_ids or
+   * '__END__'/'fail' sentinels). nextStepId is kept as a single-target alias
+   * for backward compatibility with code paths that still consult it (e.g.
+   * the retry-policy path which loops back to the same step).
    */
   async executeStep(step, stepIndex) {
     const stepResult = {
       terminate: false,
+      nextStepIds: [],
       nextStepId: null
     };
 
@@ -394,40 +458,38 @@ export class ExecutionEngine {
     let resolvedInputs;
 
     try {
-      // Resolve inputs from context — support both step.input and step.parameters formats
       const inputMapping = step.input || this.buildInputMapping(step, context) || {};
       resolvedInputs = resolveInputs(inputMapping, context);
-
     } catch (error) {
       return await this.handleStepError(step, error, stepResult);
     }
 
-    // Execute based on step type
     try {
       let output;
-      let nextStep = null;
+      let branchTargets = null;   // condition / approval write here; null otherwise
 
       switch (step.type) {
         case 'enrichment':
           output = await this.executeEnrichmentStep(step, resolvedInputs);
           break;
 
-        case 'condition':
+        case 'condition': {
           const condResult = await this.executeConditionStep(step, resolvedInputs, context);
           output = condResult.output;
-          nextStep = condResult.nextStep;
+          branchTargets = condResult.nextSteps;  // array
           break;
+        }
 
-        case 'approval':
+        case 'approval': {
           const approvalResult = await this.executeApprovalStep(step, resolvedInputs);
           if (approvalResult.waiting) {
-            // Pause execution - will be resumed via API
             stepResult.terminate = true;
             return stepResult;
           }
           output = approvalResult.output;
-          nextStep = approvalResult.nextStep;
+          branchTargets = approvalResult.nextSteps;  // array
           break;
+        }
 
         case 'action':
           output = await this.executeActionStep(step, resolvedInputs);
@@ -441,32 +503,43 @@ export class ExecutionEngine {
           throw new Error(`Unknown step type: ${step.type}`);
       }
 
-      // Store output for downstream steps
       this.stepOutputs.set(step.step_id, { output });
-
-      // Mark step completed
       await this.updateStepState(step.step_id, StepState.COMPLETED, output);
-
       await this.emitAuditEvent('step.completed', {
         step_id: step.step_id,
         step_type: step.type,
         shadow_mode: this.shadowMode && step.type === 'action'
       });
-
       await incrementMetric('steps_completed');
 
-      // Handle on_success behavior
-      if (step.on_success?.behavior === 'end') {
-        stepResult.terminate = true;
-        await this.transitionState(ExecutionState.COMPLETED);
-      } else if (step.on_success?.behavior === 'goto') {
-        stepResult.nextStepId = step.on_success.step_id;
-      } else if (nextStep) {
-        stepResult.nextStepId = nextStep;
+      // Resolve nextStepIds. Precedence:
+      //   1. on_success object form { behavior: 'end' } → terminate
+      //   2. on_success object form { behavior: 'goto', step_id|step_ids } → those targets
+      //   3. branchTargets set by condition/approval sub-executors → those targets
+      //   4. step.on_success or step.on_complete normalized to array → those targets
+      if (step.on_success && typeof step.on_success === 'object' && !Array.isArray(step.on_success)) {
+        if (step.on_success.behavior === 'end') {
+          stepResult.terminate = true;
+          await this.transitionState(ExecutionState.COMPLETED);
+          return stepResult;
+        }
+        if (step.on_success.behavior === 'goto') {
+          stepResult.nextStepIds = normalizeBranchTargets(
+            step.on_success.step_ids ?? step.on_success.step_id
+          );
+          stepResult.nextStepId = stepResult.nextStepIds[0] || null;
+          return stepResult;
+        }
       }
 
-      return stepResult;
+      if (branchTargets && branchTargets.length > 0) {
+        stepResult.nextStepIds = branchTargets;
+      } else {
+        stepResult.nextStepIds = normalizeBranchTargets(step.on_success ?? step.on_complete);
+      }
+      stepResult.nextStepId = stepResult.nextStepIds[0] || null;
 
+      return stepResult;
     } catch (error) {
       return await this.handleStepError(step, error, stepResult);
     }
@@ -660,12 +733,13 @@ export class ExecutionEngine {
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // HARDENING #1: Condition MUST provide branch target
+    // HARDENING #1: Condition MUST provide branch target(s)
+    // Branch fields accept string or string[]; normalize to array.
     // ═══════════════════════════════════════════════════════════════════════════
-    const nextStep = result ? step.on_true : step.on_false;
+    const branchField = result ? step.on_true : step.on_false;
+    const nextSteps = normalizeBranchTargets(branchField);
 
-    if (!nextStep) {
-      // This should have been caught by validation, but enforce at runtime too
+    if (nextSteps.length === 0) {
       const branchName = result ? 'on_true' : 'on_false';
       const error = new Error(
         `Condition step ${step.step_id} missing ${branchName} branch target. ` +
@@ -675,16 +749,16 @@ export class ExecutionEngine {
       throw error;
     }
 
-    logger.info(`[ExecutionEngine] Condition ${step.step_id}: ${fieldValue} ${condition.operator} ${condition.value} = ${result} → ${nextStep}`);
+    logger.info(`[ExecutionEngine] Condition ${step.step_id}: ${fieldValue} ${condition.operator} ${condition.value} = ${result} → ${JSON.stringify(nextSteps)}`);
 
     return {
       output: {
         result,
         evaluated_value: fieldValue,
         branch_taken: result ? 'on_true' : 'on_false',
-        next_step: nextStep
+        next_steps: nextSteps
       },
-      nextStep
+      nextSteps
     };
   }
 
@@ -710,7 +784,7 @@ export class ExecutionEngine {
     // Transition execution to WAITING_APPROVAL
     await this.transitionState(ExecutionState.WAITING_APPROVAL);
     this.execution.approval_id = approvalId;
-    await this.execution.save();
+    await this._saveExecution();
 
     await this.emitAuditEvent('approval.requested', {
       approval_id: approvalId,
@@ -817,7 +891,7 @@ export class ExecutionEngine {
       this.execution.duration_ms = this.execution.completed_at - this.execution.started_at;
     }
 
-    await this.execution.save();
+    await this._saveExecution();
   }
 
   /**
@@ -850,7 +924,7 @@ export class ExecutionEngine {
       step.error = error;
     }
 
-    await this.execution.save();
+    await this._saveExecution();
   }
 
   /**
@@ -860,7 +934,7 @@ export class ExecutionEngine {
     const step = this.execution.steps.find(s => s.step_id === stepId);
     if (step) {
       step.retry_count = count;
-      await this.execution.save();
+      await this._saveExecution();
     }
   }
 
@@ -877,7 +951,7 @@ export class ExecutionEngine {
       timestamp: new Date()
     };
 
-    await this.execution.save();
+    await this._saveExecution();
 
     await this.emitAuditEvent('execution.failed', {
       error: error.message,
@@ -1111,23 +1185,22 @@ async function handleApprovalApproved(execution, playbook, approvalStep) {
 
   await incrementMetric('approvals_approved');
 
-  // Determine next step (on_approved or continue)
-  const nextStepId = approvalStep.on_approved;
-
-  if (nextStepId && nextStepId !== STEP_END) {
-    const nextIndex = playbook.steps.findIndex(s => s.step_id === nextStepId);
-    if (nextIndex !== -1) {
-      engine.currentStepIndex = nextIndex;
-    }
-  } else {
-    // Continue to step after approval step
+  // Determine seed step IDs for the resumed execution.
+  // on_approved can be string (legacy) or string[] (fan-out). Normalize.
+  let seedIds = normalizeBranchTargets(approvalStep.on_approved);
+  if (seedIds.length === 0 || (seedIds.length === 1 && seedIds[0] === STEP_END)) {
+    // No explicit on_approved → continue with the step AFTER approval in array order
     const approvalIndex = playbook.steps.findIndex(s => s.step_id === approvalStep.step_id);
-    engine.currentStepIndex = approvalIndex + 1;
+    if (approvalIndex !== -1 && approvalIndex + 1 < playbook.steps.length) {
+      seedIds = [playbook.steps[approvalIndex + 1].step_id];
+    } else {
+      seedIds = [];
+    }
   }
 
-  // Continue execution
+  // Continue execution with seeded pending IDs.
   setImmediate(() => {
-    engine.execute().catch(error => {
+    engine.execute(seedIds).catch(error => {
       logger.error(`[resumeExecution] Execution failed: ${error.message}`);
     });
   });
@@ -1151,8 +1224,9 @@ async function handleApprovalRejected(execution, playbook, approvalStep) {
 
   await incrementMetric('approvals_rejected');
 
+  // Treat sentinel scalars first; array form would have been rejected by the
+  // validator's APPROVAL_REJECTED_ARRAY_SENTINEL rule.
   if (onRejected === 'fail' || onRejected === 'stop') {
-    // Fail the execution
     execution.state = ExecutionState.FAILED;
     execution.completed_at = new Date();
     execution.error = {
@@ -1164,7 +1238,7 @@ async function handleApprovalRejected(execution, playbook, approvalStep) {
     await execution.save();
     await incrementMetric('executions_failed');
   } else {
-    // on_rejected is a step_id to jump to
+    // on_rejected is a step_id (or array of step_ids) to jump to
     execution.state = ExecutionState.EXECUTING;
     await execution.save();
 
@@ -1180,11 +1254,10 @@ async function handleApprovalRejected(execution, playbook, approvalStep) {
       decided_at: new Date()
     });
 
-    const nextIndex = playbook.steps.findIndex(s => s.step_id === onRejected);
-    if (nextIndex !== -1) {
-      engine.currentStepIndex = nextIndex;
+    const seedIds = normalizeBranchTargets(approvalStep.on_rejected);
+    if (seedIds.length > 0) {
       setImmediate(() => {
-        engine.execute().catch(error => {
+        engine.execute(seedIds).catch(error => {
           logger.error(`[resumeExecution] Execution failed: ${error.message}`);
         });
       });
@@ -1250,8 +1323,8 @@ async function handleApprovalTimeout(execution, playbook, approvalStep) {
       await incrementMetric('executions_failed');
       break;
 
-    case 'continue':
-      // Continue to next step after approval
+    case 'continue': {
+      // Continue with the step AFTER approval in array order
       execution.state = ExecutionState.EXECUTING;
       await execution.save();
 
@@ -1269,14 +1342,17 @@ async function handleApprovalTimeout(execution, playbook, approvalStep) {
       });
 
       const approvalIndex = playbook.steps.findIndex(s => s.step_id === approvalStep.step_id);
-      engineContinue.currentStepIndex = approvalIndex + 1;
+      const seedIds = (approvalIndex !== -1 && approvalIndex + 1 < playbook.steps.length)
+        ? [playbook.steps[approvalIndex + 1].step_id]
+        : [];
 
       setImmediate(() => {
-        engineContinue.execute().catch(error => {
+        engineContinue.execute(seedIds).catch(error => {
           logger.error(`[resumeExecution] Execution failed: ${error.message}`);
         });
       });
       break;
+    }
 
     case 'skip':
       // Skip to end - complete the execution
@@ -1297,7 +1373,9 @@ async function handleApprovalTimeout(execution, playbook, approvalStep) {
 
         logger.info(`[handleApprovalTimeout] Approval timeout with __END__ - execution completed`);
       } else {
-        // on_timeout is a step_id to jump to
+        // on_timeout is a step_id (or array of step_ids) to jump to.
+        // Array form was validated by APPROVAL_TIMEOUT_ARRAY_SENTINEL rule to
+        // contain no sentinels, so normalizeBranchTargets is safe here.
         execution.state = ExecutionState.EXECUTING;
         await execution.save();
 
@@ -1314,14 +1392,13 @@ async function handleApprovalTimeout(execution, playbook, approvalStep) {
           decided_at: new Date()
         });
 
-        const nextIndex = playbook.steps.findIndex(s => s.step_id === onTimeout);
-        if (nextIndex === -1) {
-          throw new Error(`on_timeout step not found: ${onTimeout}`);
+        const seedIds = normalizeBranchTargets(onTimeout);
+        if (seedIds.length === 0) {
+          throw new Error(`on_timeout has no targets`);
         }
-        engineGoto.currentStepIndex = nextIndex;
 
         setImmediate(() => {
-          engineGoto.execute().catch(error => {
+          engineGoto.execute(seedIds).catch(error => {
             logger.error(`[resumeExecution] Execution failed: ${error.message}`);
           });
         });

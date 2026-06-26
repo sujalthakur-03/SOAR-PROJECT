@@ -10,6 +10,7 @@ export interface Playbook {
   version: number;
   trigger?: Record<string, unknown> | null; // Extracted from dsl.trigger
   steps: Record<string, unknown>[];  // Extracted from dsl.steps
+  ui_end_position?: { x: number; y: number };  // End node canvas position
   executionCount?: number;  // Frontend camelCase alias
   execution_count?: number; // Backend snake_case
   lastExecution?: string | null;  // Frontend camelCase alias
@@ -34,6 +35,9 @@ function normalizePlaybook(raw: any): Playbook {
     version: raw.version || 1,
     trigger: dsl.trigger || raw.trigger || null,
     steps: dsl.steps || raw.steps || [],
+    // UI canvas layout — End node position lives at the dsl root; trigger
+    // and per-step positions ride inside their own objects already.
+    ui_end_position: dsl.ui_end_position || raw.ui_end_position || undefined,
     executionCount: raw.execution_count || raw.executionCount || 0,
     execution_count: raw.execution_count || 0,
     lastExecution: raw.last_execution || raw.lastExecution || null,

@@ -281,6 +281,8 @@ class APIClient {
       dsl: {
         trigger: playbook.trigger || {},
         steps: ensureStepActionTypes(playbook.steps || []),
+        // Persist End node's canvas position when one exists on the graph.
+        ...(playbook.ui_end_position ? { ui_end_position: playbook.ui_end_position } : {}),
       },
       // Explicitly excluded: version, change_summary, enabled
     };
@@ -318,6 +320,8 @@ class APIClient {
       dsl: {
         trigger: playbook.trigger || {},
         steps: ensureStepActionTypes(playbook.steps || []),
+        // Persist End node's canvas position when one exists on the graph.
+        ...(playbook.ui_end_position ? { ui_end_position: playbook.ui_end_position } : {}),
       },
       change_summary: playbook.change_summary || 'Updated via playbook editor',
       // Explicitly excluded: playbook_id (in URL), version, enabled

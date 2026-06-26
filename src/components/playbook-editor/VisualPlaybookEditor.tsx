@@ -23,6 +23,7 @@ interface PlaybookSaveData {
   description: string;
   trigger: Record<string, unknown>;
   steps: Record<string, unknown>[];
+  ui_end_position?: { x: number; y: number };  // Position of the End node, if one exists
 }
 
 interface VisualPlaybookEditorProps {
@@ -34,6 +35,11 @@ interface VisualPlaybookEditorProps {
 // ═══════════════════════════════════════════════════════════════════════════════
 // DSL CONVERSION UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Branch fields: SAVE shape is always string[] (canonical, decided 2026-06).
+// READ shape may be string (legacy single-target) OR string[]. The
+// convertDSLToNodes loader normalizes via toTargetArray() before use.
+type BranchTargets = string | string[];
 
 interface DSLStep {
   step_id: string;
@@ -48,25 +54,34 @@ interface DSLStep {
     value: unknown;
     time_window_minutes?: number;
   };
-  on_true?: string;
-  on_false?: string;
-  on_success?: string;
+  on_true?: BranchTargets;
+  on_false?: BranchTargets;
+  on_success?: BranchTargets;
   on_failure?: string;
   approvers?: string[];
   timeout_hours?: number;
-  on_approved?: string;
-  on_rejected?: string;
-  on_timeout?: string;
+  on_approved?: BranchTargets;
+  on_rejected?: BranchTargets;
+  on_timeout?: BranchTargets;
   channel?: string;
   recipients?: string | string[];
   message?: string;
   subject?: string;
   duration_seconds?: number;
-  on_complete?: string;
+  on_complete?: BranchTargets;
   auto_skip_severity?: string;
   reason?: string;
   config?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+/** Coerce a branch field to string[]. Legacy single-string and empty values
+ *  both normalize cleanly. Used everywhere the canvas reads a DSL field. */
+function toTargetArray(field: BranchTargets | undefined | null): string[] {
+  if (field == null || field === '') return [];
+  if (Array.isArray(field)) return field.filter((t): t is string => typeof t === 'string' && t !== '');
+  if (typeof field === 'string') return [field];
+  return [];
 }
 
 /**
@@ -86,10 +101,23 @@ function deriveNotificationActionType(channel: string): string {
   return NOTIFICATION_CHANNEL_TO_ACTION_TYPE[channel] || channel || 'email';
 }
 
-function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<string, unknown>; steps: DSLStep[] } {
+function convertNodesToDSL(
+  nodes: Node[],
+  edges: Edge[]
+): { trigger: Record<string, unknown>; steps: DSLStep[]; ui_end_position?: { x: number; y: number } } {
   const triggerNode = nodes.find((n) => (n.data as PlaybookNodeData).stepType === 'trigger');
   const triggerData = triggerNode?.data as PlaybookNodeData | undefined;
-  const trigger = (triggerData?.config as Record<string, unknown>) || {};
+  const trigger = { ...((triggerData?.config as Record<string, unknown>) || {}) };
+  // Persist trigger node's canvas position so layout survives save → reload.
+  if (triggerNode) {
+    trigger.ui_position = { x: triggerNode.position.x, y: triggerNode.position.y };
+  }
+
+  // Locate the End node (if any) and capture its position separately.
+  const endNode = nodes.find((n) => (n.data as PlaybookNodeData).stepType === 'end');
+  const ui_end_position = endNode
+    ? { x: endNode.position.x, y: endNode.position.y }
+    : undefined;
 
   const stepNodes = nodes.filter((n) => {
     const nodeData = n.data as PlaybookNodeData;
@@ -114,16 +142,32 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
     const config = (nodeData.config as Record<string, unknown>) || {};
     const outgoingEdges = edgeMap.get(node.id) || [];
 
+    // Resolve a single React Flow target id → DSL step_id (or '__END__').
     const resolveTarget = (targetId: string | undefined): string | null => {
       if (!targetId) return null;
       if (endNodeIds.has(targetId)) return '__END__';
       return targetId;
     };
 
+    // Collect ALL outgoing edges that match a given sourceHandle into a
+    // string[] of resolved DSL targets. Multi-parent → multi-child fan-out is
+    // a first-class DSL shape (chosen 2026-06: "Always array"). Single-child
+    // playbooks just have length-1 arrays — engine + validator accept both
+    // string and array for backward-compat with legacy data.
+    const collectTargets = (matcher: (handle: string | null | undefined) => boolean): string[] => {
+      return outgoingEdges
+        .filter((e) => matcher(e.sourceHandle))
+        .map((e) => resolveTarget(e.target))
+        .filter((t): t is string => t !== null);
+    };
+    const successMatcher = (h: string | null | undefined) => !h || h === 'success';
+
     const step: DSLStep = {
       step_id: node.id,
       type: nodeData.stepType,
       name: nodeData.label,
+      // Persist canvas position so layout survives save → reload.
+      ui_position: { x: node.position.x, y: node.position.y },
     };
 
     switch (nodeData.stepType) {
@@ -134,8 +178,7 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
           observable_field: config.observable_field || 'source_ip',
           output_variable: config.output_variable || 'enrichment_result',
         };
-        const successEdge = outgoingEdges.find((e) => !e.sourceHandle || e.sourceHandle === 'success');
-        step.on_success = resolveTarget(successEdge?.target) || undefined;
+        step.on_success = collectTargets(successMatcher);
         step.on_failure = 'continue';
         break;
       }
@@ -149,10 +192,10 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
         if (config.time_window_minutes) {
           step.condition.time_window_minutes = config.time_window_minutes as number;
         }
-        const trueEdge = outgoingEdges.find((e) => e.sourceHandle === 'true');
-        const falseEdge = outgoingEdges.find((e) => e.sourceHandle === 'false');
-        step.on_true = resolveTarget(trueEdge?.target) || '__END__';
-        step.on_false = resolveTarget(falseEdge?.target) || '__END__';
+        const trueTargets = collectTargets((h) => h === 'true');
+        const falseTargets = collectTargets((h) => h === 'false');
+        step.on_true = trueTargets.length > 0 ? trueTargets : ['__END__'];
+        step.on_false = falseTargets.length > 0 ? falseTargets : ['__END__'];
         break;
       }
 
@@ -163,12 +206,12 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
         if (config.auto_skip_severity) {
           step.auto_skip_severity = config.auto_skip_severity as string;
         }
-        const approvedEdge = outgoingEdges.find((e) => e.sourceHandle === 'approved');
-        const rejectedEdge = outgoingEdges.find((e) => e.sourceHandle === 'rejected');
-        const timeoutEdge = outgoingEdges.find((e) => e.sourceHandle === 'timeout');
-        step.on_approved = resolveTarget(approvedEdge?.target) || '__END__';
-        step.on_rejected = resolveTarget(rejectedEdge?.target) || 'fail';
-        step.on_timeout = resolveTarget(timeoutEdge?.target) || 'fail';
+        const approvedTargets = collectTargets((h) => h === 'approved');
+        const rejectedTargets = collectTargets((h) => h === 'rejected');
+        const timeoutTargets = collectTargets((h) => h === 'timeout');
+        step.on_approved = approvedTargets.length > 0 ? approvedTargets : ['__END__'];
+        step.on_rejected = rejectedTargets.length > 0 ? rejectedTargets : ['fail'];
+        step.on_timeout = timeoutTargets.length > 0 ? timeoutTargets : ['fail'];
         break;
       }
 
@@ -176,8 +219,7 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
         step.connector_id = (config.connector_id as string) || (config.connector as string) || '';
         step.action_type = (config.action as string) || 'execute';
         step.parameters = (config.parameters as Record<string, unknown>) || {};
-        const successEdge = outgoingEdges.find((e) => !e.sourceHandle || e.sourceHandle === 'success');
-        step.on_success = resolveTarget(successEdge?.target) || undefined;
+        step.on_success = collectTargets(successMatcher);
         step.on_failure = 'stop';
         break;
       }
@@ -192,16 +234,14 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
         if (config.subject) {
           step.subject = config.subject as string;
         }
-        const nextEdge = outgoingEdges[0];
-        step.on_success = resolveTarget(nextEdge?.target) || undefined;
+        step.on_success = collectTargets(() => true);   // notification has no labeled handles
         step.on_failure = 'continue';
         break;
       }
 
       case 'delay': {
         step.duration_seconds = (config.duration_seconds as number) || 60;
-        const nextEdge = outgoingEdges[0];
-        step.on_complete = resolveTarget(nextEdge?.target) || undefined;
+        step.on_complete = collectTargets(() => true);
         break;
       }
 
@@ -211,8 +251,7 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
       }
 
       default: {
-        const nextEdge = outgoingEdges[0];
-        step.on_complete = resolveTarget(nextEdge?.target) || undefined;
+        step.on_complete = collectTargets(() => true);
         step.config = config;
       }
     }
@@ -220,7 +259,7 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
     return step;
   });
 
-  return { trigger, steps };
+  return { trigger, steps, ui_end_position };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -228,28 +267,44 @@ function convertNodesToDSL(nodes: Node[], edges: Edge[]): { trigger: Record<stri
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function convertDSLToNodes(
-  playbook: { trigger?: Record<string, unknown> | null; steps: Record<string, unknown>[] }
+  playbook: {
+    trigger?: Record<string, unknown> | null;
+    steps: Record<string, unknown>[];
+    ui_end_position?: { x: number; y: number };
+  }
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const stepIdToNodeId = new Map<string, string>();
   let nodeCounter = 1;
 
-  // Create trigger node
+  // Helper: parse a stored ui_position field, accepting either {x,y} or
+  // null/undefined. Returns null when the value is missing or invalid so
+  // the caller can fall back to the auto-layout default.
+  const readUiPosition = (raw: unknown): { x: number; y: number } | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.x !== 'number' || typeof obj.y !== 'number') return null;
+    return { x: obj.x, y: obj.y };
+  };
+
+  // Trigger node — prefer saved ui_position, fall back to fixed top-center.
   const triggerNodeId = `trigger-${nodeCounter++}`;
+  const triggerConfig = (playbook.trigger || {
+    source: 'cybersentinel',
+    severity_threshold: 'high',
+    rule_ids: '',
+  }) as Record<string, unknown>;
+  const triggerPos = readUiPosition(triggerConfig.ui_position) || { x: 250, y: 50 };
   nodes.push({
     id: triggerNodeId,
     type: 'trigger',
-    position: { x: 250, y: 50 },
+    position: triggerPos,
     data: {
       label: 'Alert Received',
       stepType: 'trigger',
       subtype: 'webhook',
-      config: playbook.trigger || {
-        source: 'cybersentinel',
-        severity_threshold: 'high',
-        rule_ids: '',
-      },
+      config: triggerConfig,
     } as PlaybookNodeData,
   });
 
@@ -321,10 +376,13 @@ function convertDSLToNodes(
         Object.assign(config, stepData.config || {});
     }
 
+    const stepPos =
+      readUiPosition(stepData.ui_position) ||
+      { x: 250, y: startY + index * stepSpacing };
     nodes.push({
       id: nodeId,
       type: nodeType,
-      position: { x: 250, y: startY + index * stepSpacing },
+      position: stepPos,
       data: {
         label: stepData.name || `${stepData.type} step`,
         stepType: stepData.type as PlaybookNodeData['stepType'],
@@ -352,7 +410,7 @@ function convertDSLToNodes(
   }
 
   // Helper to resolve target step_id to node_id
-  const resolveTargetNodeId = (targetStepId: string | undefined): string | null => {
+  const resolveTargetNodeId = (targetStepId: string | undefined | null): string | null => {
     if (!targetStepId) return null;
     if (targetStepId === '__END__') {
       endNodeUsed.value = true;
@@ -361,107 +419,66 @@ function convertDSLToNodes(
     return stepIdToNodeId.get(targetStepId) || null;
   };
 
+  // Resolve a BranchTargets field (string | string[]) into an array of
+  // {nodeId, stepId} pairs for edge generation. Filters out null targets
+  // (e.g. references to deleted steps).
+  const resolveTargetList = (field: BranchTargets | undefined | null) =>
+    toTargetArray(field)
+      .filter((t) => t !== 'fail')   // 'fail' is a sentinel, not a renderable node
+      .map((stepId) => ({ stepId, nodeId: resolveTargetNodeId(stepId) }))
+      .filter((p): p is { stepId: string; nodeId: string } => p.nodeId !== null);
+
   // Create edges for each step's transitions
   steps.forEach((step) => {
     const stepData = step as DSLStep;
     const sourceNodeId = stepIdToNodeId.get(stepData.step_id);
     if (!sourceNodeId) return;
 
+    // Helper to push edges for a branch with a labeled source handle.
+    const pushBranchEdges = (
+      targets: { stepId: string; nodeId: string }[],
+      handle: string,
+      label?: string
+    ) => {
+      targets.forEach(({ nodeId }, idx) => {
+        const edge: Edge = {
+          id: `e-${sourceNodeId}-${handle}-${nodeId}-${idx}`,
+          source: sourceNodeId,
+          target: nodeId,
+          sourceHandle: handle === 'success' ? undefined : handle,
+          type: 'smoothstep',
+          animated: true,
+          style: { strokeWidth: 2 },
+        };
+        if (label) {
+          edge.label = label;
+          edge.labelStyle = { fill: 'hsl(var(--foreground))', fontWeight: 500, fontSize: 11 };
+          edge.labelBgStyle = { fill: 'hsl(var(--card))', fillOpacity: 0.9 };
+        }
+        edges.push(edge);
+      });
+    };
+
     switch (stepData.type) {
       case 'condition': {
-        const trueTarget = resolveTargetNodeId(stepData.on_true);
-        const falseTarget = resolveTargetNodeId(stepData.on_false);
-        if (trueTarget) {
-          edges.push({
-            id: `e-${sourceNodeId}-true-${trueTarget}`,
-            source: sourceNodeId,
-            target: trueTarget,
-            sourceHandle: 'true',
-            type: 'smoothstep',
-            animated: true,
-            style: { strokeWidth: 2 },
-            label: 'true',
-            labelStyle: { fill: 'hsl(var(--foreground))', fontWeight: 500, fontSize: 11 },
-            labelBgStyle: { fill: 'hsl(var(--card))', fillOpacity: 0.9 },
-          });
-        }
-        if (falseTarget) {
-          edges.push({
-            id: `e-${sourceNodeId}-false-${falseTarget}`,
-            source: sourceNodeId,
-            target: falseTarget,
-            sourceHandle: 'false',
-            type: 'smoothstep',
-            animated: true,
-            style: { strokeWidth: 2 },
-            label: 'false',
-            labelStyle: { fill: 'hsl(var(--foreground))', fontWeight: 500, fontSize: 11 },
-            labelBgStyle: { fill: 'hsl(var(--card))', fillOpacity: 0.9 },
-          });
-        }
+        pushBranchEdges(resolveTargetList(stepData.on_true), 'true', 'true');
+        pushBranchEdges(resolveTargetList(stepData.on_false), 'false', 'false');
         break;
       }
       case 'approval': {
-        const approvedTarget = resolveTargetNodeId(stepData.on_approved);
-        const rejectedTarget = resolveTargetNodeId(stepData.on_rejected);
-        const timeoutTarget = resolveTargetNodeId(stepData.on_timeout);
-        if (approvedTarget) {
-          edges.push({
-            id: `e-${sourceNodeId}-approved-${approvedTarget}`,
-            source: sourceNodeId,
-            target: approvedTarget,
-            sourceHandle: 'approved',
-            type: 'smoothstep',
-            animated: true,
-            style: { strokeWidth: 2 },
-            label: 'approved',
-            labelStyle: { fill: 'hsl(var(--foreground))', fontWeight: 500, fontSize: 11 },
-            labelBgStyle: { fill: 'hsl(var(--card))', fillOpacity: 0.9 },
-          });
-        }
-        if (rejectedTarget && rejectedTarget !== 'fail') {
-          edges.push({
-            id: `e-${sourceNodeId}-rejected-${rejectedTarget}`,
-            source: sourceNodeId,
-            target: rejectedTarget,
-            sourceHandle: 'rejected',
-            type: 'smoothstep',
-            animated: true,
-            style: { strokeWidth: 2 },
-            label: 'rejected',
-            labelStyle: { fill: 'hsl(var(--foreground))', fontWeight: 500, fontSize: 11 },
-            labelBgStyle: { fill: 'hsl(var(--card))', fillOpacity: 0.9 },
-          });
-        }
-        if (timeoutTarget && timeoutTarget !== 'fail') {
-          edges.push({
-            id: `e-${sourceNodeId}-timeout-${timeoutTarget}`,
-            source: sourceNodeId,
-            target: timeoutTarget,
-            sourceHandle: 'timeout',
-            type: 'smoothstep',
-            animated: true,
-            style: { strokeWidth: 2 },
-            label: 'timeout',
-            labelStyle: { fill: 'hsl(var(--foreground))', fontWeight: 500, fontSize: 11 },
-            labelBgStyle: { fill: 'hsl(var(--card))', fillOpacity: 0.9 },
-          });
-        }
+        pushBranchEdges(resolveTargetList(stepData.on_approved), 'approved', 'approved');
+        pushBranchEdges(resolveTargetList(stepData.on_rejected), 'rejected', 'rejected');
+        pushBranchEdges(resolveTargetList(stepData.on_timeout), 'timeout', 'timeout');
         break;
       }
       default: {
-        // For other step types, use on_success or on_complete
-        const nextTarget = resolveTargetNodeId(stepData.on_success || stepData.on_complete);
-        if (nextTarget) {
-          edges.push({
-            id: `e-${sourceNodeId}-${nextTarget}`,
-            source: sourceNodeId,
-            target: nextTarget,
-            type: 'smoothstep',
-            animated: true,
-            style: { strokeWidth: 2 },
-          });
-        }
+        // action, enrichment, notification, delay, stop, anything else:
+        // use on_success first, then on_complete as fallback. Both are arrays.
+        const targets =
+          resolveTargetList(stepData.on_success).length > 0
+            ? resolveTargetList(stepData.on_success)
+            : resolveTargetList(stepData.on_complete);
+        pushBranchEdges(targets, 'success');
         break;
       }
     }
@@ -469,10 +486,13 @@ function convertDSLToNodes(
 
   // Add end node if it was used
   if (endNodeUsed.value) {
+    const endPos =
+      readUiPosition(playbook.ui_end_position) ||
+      { x: 250, y: startY + steps.length * stepSpacing };
     nodes.push({
       id: endNodeId,
       type: 'end',
-      position: { x: 250, y: startY + steps.length * stepSpacing },
+      position: endPos,
       data: {
         label: 'End',
         stepType: 'end',
@@ -614,6 +634,8 @@ export function VisualPlaybookEditor({ playbook, onSave, onClose }: VisualPlaybo
       return convertDSLToNodes({
         trigger: playbook.trigger || null,
         steps: playbook.steps || [],
+        ui_end_position: (playbook as { ui_end_position?: { x: number; y: number } })
+          .ui_end_position,
       });
     }
     return null;
@@ -713,7 +735,7 @@ export function VisualPlaybookEditor({ playbook, onSave, onClose }: VisualPlaybo
       });
     }
 
-    const { trigger, steps } = convertNodesToDSL(nodes, edges);
+    const { trigger, steps, ui_end_position } = convertNodesToDSL(nodes, edges);
 
     // Strict CREATE vs UPDATE separation:
     // CREATE: { name, description, trigger, steps } — no playbook_id
@@ -724,6 +746,9 @@ export function VisualPlaybookEditor({ playbook, onSave, onClose }: VisualPlaybo
       trigger,
       steps,
     };
+    if (ui_end_position) {
+      saveData.ui_end_position = ui_end_position;
+    }
 
     // Only attach playbook_id for EDIT mode (triggers PUT path in PlaybookManager)
     const existingId = playbook?.playbook_id || playbook?.id;
