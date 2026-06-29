@@ -9,6 +9,14 @@ import authMiddleware from '../middleware/auth.js';
 import { requireRole } from '../middleware/auth.js';
 import User from '../models/user.js';
 import logger from '../utils/logger.js';
+import { logAction, actorFromReq } from '../services/audit-service.js';
+
+// Helper: extract IP from request even when no JWT is present (login/logout)
+function ipFromReq(req) {
+  const xff = req?.headers?.['x-forwarded-for'];
+  const firstHop = typeof xff === 'string' ? xff.split(',')[0].trim() : undefined;
+  return firstHop || req?.ip || req?.socket?.remoteAddress || 'unknown';
+}
 
 const router = express.Router();
 
@@ -55,18 +63,45 @@ setInterval(() => {
  * Authenticate user and return JWT token
  */
 router.post('/login', loginRateLimiter, async (req, res) => {
-  try {
-    const { username, password } = req.body;
+  const clientIp = ipFromReq(req);
+  const username = req.body?.username || 'unknown';
 
-    if (!username || !password) {
+  try {
+    const { password } = req.body;
+
+    if (!username || username === 'unknown' || !password) {
+      // Don't audit malformed requests — they're noise, not real attempts.
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
     const result = await authenticateUser(username, password);
 
     if (!result.success) {
+      // Failed login — audit so SOC can see brute-force / credential-stuffing
+      logAction({
+        action: 'login',
+        resource_type: 'auth',
+        resource_name: username,
+        actor_email: username,                  // best-effort: what they typed
+        actor_role: 'unknown',
+        actor_ip: clientIp,
+        outcome: 'failure',
+        error_message: result.error,
+        details: { reason: result.error },
+      }).catch(() => {});
       return res.status(401).json({ error: result.error });
     }
+
+    // Successful login — audit
+    logAction({
+      action: 'login',
+      resource_type: 'auth',
+      resource_name: result.user.email,
+      actor_email: result.user.email,
+      actor_role: result.user.role,
+      actor_ip: clientIp,
+      outcome: 'success',
+    }).catch(() => {});
 
     res.json({
       success: true,
@@ -75,6 +110,16 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     });
   } catch (error) {
     logger.error('Login error:', error);
+    logAction({
+      action: 'login',
+      resource_type: 'auth',
+      resource_name: username,
+      actor_email: username,
+      actor_role: 'unknown',
+      actor_ip: clientIp,
+      outcome: 'failure',
+      error_message: error.message,
+    }).catch(() => {});
     res.status(500).json({ error: 'Login failed' });
   }
 });
@@ -145,8 +190,29 @@ router.get('/me', async (req, res) => {
  * Logout user (client-side token removal)
  */
 router.post('/logout', (req, res) => {
-  // In JWT-based auth, logout is handled client-side by removing the token
-  // This endpoint is here for consistency and future session management
+  // In JWT-based auth, logout is handled client-side by removing the token.
+  // Audit the explicit hit so we know who logged out from where, when.
+  // The endpoint is not authMiddleware-gated, so req.user may be absent;
+  // we honor the Authorization header if present.
+  let actorEmail = 'anonymous';
+  let actorRole = 'unknown';
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const v = verifyToken(authHeader.substring(7));
+    if (v.valid && v.user) {
+      actorEmail = v.user.email || actorEmail;
+      actorRole = v.user.role || actorRole;
+    }
+  }
+  logAction({
+    action: 'logout',
+    resource_type: 'auth',
+    resource_name: actorEmail,
+    actor_email: actorEmail,
+    actor_role: actorRole,
+    actor_ip: ipFromReq(req),
+    outcome: 'success',
+  }).catch(() => {});
   res.json({ success: true, message: 'Logged out successfully' });
 });
 

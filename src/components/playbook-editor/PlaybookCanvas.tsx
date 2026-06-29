@@ -84,8 +84,31 @@ const defaultNodes: Node[] = [
 
 const defaultEdges: Edge[] = [];
 
-let nodeId = 1;
-const getNodeId = () => `node-${++nodeId}`;
+/**
+ * Extract the highest numeric suffix from a set of node IDs that look like
+ * `trigger-3`, `end-7`, or `node-12`. Used to seed the per-instance node-id
+ * counter so newly-dropped palette items don't collide with existing IDs.
+ *
+ * THE BUG THIS FIXES: previously a module-level `let nodeId = 1` counter was
+ * shared across all canvas mounts. Opening a playbook whose existing nodes
+ * were `node-3, node-4, node-5` and then dropping a new step produced
+ * `node-2`, then `node-3` — colliding with an existing node ID. React Flow
+ * then visually "auto-connected" the existing edges to the newly dropped
+ * node because their source/target ID strings matched. Looked like
+ * spontaneous auto-attach to the user.
+ */
+const NODE_ID_RE = /^(?:trigger|end|node)-(\d+)$/;
+function maxNodeIdSuffix(nodes: Node[]): number {
+  let max = 0;
+  for (const n of nodes) {
+    const m = String(n.id).match(NODE_ID_RE);
+    if (m) {
+      const v = parseInt(m[1], 10);
+      if (Number.isFinite(v) && v > max) max = v;
+    }
+  }
+  return max;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COMPONENT
@@ -104,6 +127,10 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  // Per-canvas-instance node-id counter, seeded from the highest existing id.
+  // Bump on every getNodeId() so freshly dropped nodes always get a unique id.
+  const nodeIdCounter = useRef<number>(maxNodeIdSuffix(initialNodes));
+  const getNodeId = useCallback(() => `node-${++nodeIdCounter.current}`, []);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
 
@@ -133,6 +160,17 @@ export const PlaybookCanvas = forwardRef<PlaybookCanvasRef, PlaybookCanvasProps>
     getNodes: () => nodes,
     getEdges: () => edges,
   }), [nodes, edges]);
+
+  // Keep nodeIdCounter ahead of any id present in the current node set.
+  // Belt-and-suspenders: undo/redo or external setNodes paths could
+  // reintroduce a high-numbered id; if we don't bump the counter, the next
+  // drop would collide. Runs whenever the node set changes.
+  useEffect(() => {
+    const currentMax = maxNodeIdSuffix(nodes);
+    if (currentMax > nodeIdCounter.current) {
+      nodeIdCounter.current = currentMax;
+    }
+  }, [nodes]);
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // UPDATE NODE HIGHLIGHT STATUS

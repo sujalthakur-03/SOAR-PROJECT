@@ -59,7 +59,9 @@ const auditLogSchema = new mongoose.Schema({
       'connector',
       'user',
       'webhook',
-      'system'
+      'system',
+      'case',
+      'auth'
     ]
   },
   resource_id: String,

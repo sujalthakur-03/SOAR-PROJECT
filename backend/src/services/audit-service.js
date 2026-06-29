@@ -7,6 +7,30 @@ import { AuditLog } from '../models/index.js';
 import logger from '../utils/logger.js';
 
 /**
+ * Extract canonical actor info from an Express request.
+ *
+ * Returns { actor_email, actor_role, actor_ip } populated from the JWT
+ * (`req.user`) plus the client's source IP. Use this everywhere we call
+ * logAction() so the audit row consistently has actor + IP.
+ *
+ * IP precedence:
+ *   1. X-Forwarded-For (first hop, when behind nginx/load balancer)
+ *   2. req.ip (Express default; honors `trust proxy` setting)
+ *   3. req.socket.remoteAddress (raw socket fallback)
+ *   4. 'unknown' (no fallback found)
+ */
+export function actorFromReq(req) {
+  const xff = req?.headers?.['x-forwarded-for'];
+  const firstHop = typeof xff === 'string' ? xff.split(',')[0].trim() : undefined;
+  const ip = firstHop || req?.ip || req?.socket?.remoteAddress || 'unknown';
+  return {
+    actor_email: req?.user?.email || 'anonymous',
+    actor_role: req?.user?.role || 'unknown',
+    actor_ip: ip,
+  };
+}
+
+/**
  * Create audit log entry
  */
 export async function logAction(actionData) {
@@ -172,6 +196,7 @@ export async function getAuditStats(timeRange = '24h') {
 
 export default {
   logAction,
+  actorFromReq,
   getAuditLogs,
   getResourceAuditLogs,
   getAuditStats

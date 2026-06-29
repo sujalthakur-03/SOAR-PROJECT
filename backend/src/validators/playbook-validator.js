@@ -20,6 +20,7 @@
  */
 
 import logger from '../utils/logger.js';
+import { normalizeBranchTargets } from '../engine/branch-targets.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -302,20 +303,28 @@ function validateStep(step, index, allStepIds, result) {
       break;
   }
 
-  // Validate on_success goto references (if applicable)
+  // Validate on_success goto references — supports legacy object form
+  // {behavior:'goto', step_id|step_ids} AND new array form ['id1','id2'].
   if (step.on_success?.behavior === 'goto') {
-    if (!step.on_success.step_id) {
+    const gotoTargets = normalizeBranchTargets(
+      step.on_success.step_ids ?? step.on_success.step_id
+    );
+    if (gotoTargets.length === 0) {
       result.addError(
         ErrorCodes.MISSING_REQUIRED_FIELD,
         `Step ${step.step_id} has on_success.behavior='goto' but missing step_id`,
         { ...stepContext, field: 'on_success.step_id' }
       );
-    } else if (!allStepIds.has(step.on_success.step_id) && step.on_success.step_id !== STEP_END) {
-      result.addError(
-        ErrorCodes.INVALID_STEP_REFERENCE,
-        `Step ${step.step_id} references non-existent step '${step.on_success.step_id}' in on_success`,
-        { ...stepContext, target: step.on_success.step_id }
-      );
+    } else {
+      gotoTargets.forEach((target) => {
+        if (target !== STEP_END && !allStepIds.has(target)) {
+          result.addError(
+            ErrorCodes.INVALID_STEP_REFERENCE,
+            `Step ${step.step_id} references non-existent step '${target}' in on_success`,
+            { ...stepContext, target }
+          );
+        }
+      });
     }
   }
 }
@@ -368,33 +377,45 @@ function validateConditionStep(step, allStepIds, result) {
     );
   }
 
-  // MANDATORY: on_true and on_false must both be defined
-  if (!step.on_true) {
+  // MANDATORY: on_true and on_false must both define at least one target.
+  // Accepts string (legacy single-target) or string[] (fan-out). Each entry
+  // must be either '__END__' or a known step_id.
+  const trueTargets = normalizeBranchTargets(step.on_true);
+  if (trueTargets.length === 0) {
     result.addError(
       ErrorCodes.CONDITION_MISSING_ON_TRUE,
       `Condition step ${step.step_id} MUST define 'on_true'. Condition steps are terminal and must always branch.`,
       { ...stepContext, rule: 'NO_FALL_THROUGH' }
     );
-  } else if (!allStepIds.has(step.on_true) && step.on_true !== STEP_END) {
-    result.addError(
-      ErrorCodes.CONDITION_INVALID_ON_TRUE,
-      `Condition step ${step.step_id} references non-existent step '${step.on_true}' in on_true`,
-      { ...stepContext, target: step.on_true }
-    );
+  } else {
+    trueTargets.forEach((target) => {
+      if (target !== STEP_END && !allStepIds.has(target)) {
+        result.addError(
+          ErrorCodes.CONDITION_INVALID_ON_TRUE,
+          `Condition step ${step.step_id} references non-existent step '${target}' in on_true`,
+          { ...stepContext, target }
+        );
+      }
+    });
   }
 
-  if (!step.on_false) {
+  const falseTargets = normalizeBranchTargets(step.on_false);
+  if (falseTargets.length === 0) {
     result.addError(
       ErrorCodes.CONDITION_MISSING_ON_FALSE,
       `Condition step ${step.step_id} MUST define 'on_false'. Condition steps are terminal and must always branch.`,
       { ...stepContext, rule: 'NO_FALL_THROUGH' }
     );
-  } else if (!allStepIds.has(step.on_false) && step.on_false !== STEP_END) {
-    result.addError(
-      ErrorCodes.CONDITION_INVALID_ON_FALSE,
-      `Condition step ${step.step_id} references non-existent step '${step.on_false}' in on_false`,
-      { ...stepContext, target: step.on_false }
-    );
+  } else {
+    falseTargets.forEach((target) => {
+      if (target !== STEP_END && !allStepIds.has(target)) {
+        result.addError(
+          ErrorCodes.CONDITION_INVALID_ON_FALSE,
+          `Condition step ${step.step_id} references non-existent step '${target}' in on_false`,
+          { ...stepContext, target }
+        );
+      }
+    });
   }
 }
 
@@ -422,42 +443,63 @@ function validateApprovalStep(step, allStepIds, result) {
     );
   }
 
-  // Validate on_approved reference
-  if (step.on_approved && !allStepIds.has(step.on_approved) && step.on_approved !== STEP_END) {
-    result.addError(
-      ErrorCodes.APPROVAL_INVALID_ON_APPROVED,
-      `Approval step ${step.step_id} references non-existent step '${step.on_approved}' in on_approved`,
-      { ...stepContext, target: step.on_approved }
-    );
-  }
-
-  // Validate on_rejected
-  if (step.on_rejected) {
-    const validOnRejected = ['fail', 'stop', STEP_END];
-    const isValidStepRef = allStepIds.has(step.on_rejected);
-    const isValidBehavior = validOnRejected.includes(step.on_rejected);
-
-    if (!isValidStepRef && !isValidBehavior) {
+  // Validate on_approved reference(s). Accepts string or string[].
+  normalizeBranchTargets(step.on_approved).forEach((target) => {
+    if (target !== STEP_END && !allStepIds.has(target)) {
       result.addError(
-        ErrorCodes.APPROVAL_INVALID_ON_REJECTED,
-        `Approval step ${step.step_id} has invalid on_rejected '${step.on_rejected}'. Must be 'fail', 'stop', '__END__', or a valid step_id`,
-        { ...stepContext, invalid_value: step.on_rejected }
+        ErrorCodes.APPROVAL_INVALID_ON_APPROVED,
+        `Approval step ${step.step_id} references non-existent step '${target}' in on_approved`,
+        { ...stepContext, target }
       );
+    }
+  });
+
+  // Validate on_rejected. Accepts string sentinel ('fail'/'stop'/'__END__') or
+  // string step_id OR string[] of step_ids. Sentinels are scalar-only — they
+  // can't appear inside an array (array-with-'fail' is meaningless fan-out).
+  if (step.on_rejected !== undefined && step.on_rejected !== null && step.on_rejected !== '') {
+    if (typeof step.on_rejected === 'string') {
+      const validOnRejected = ['fail', 'stop', STEP_END];
+      const isValidBehavior = validOnRejected.includes(step.on_rejected);
+      const isValidStepRef = allStepIds.has(step.on_rejected);
+      if (!isValidBehavior && !isValidStepRef) {
+        result.addError(
+          ErrorCodes.APPROVAL_INVALID_ON_REJECTED,
+          `Approval step ${step.step_id} has invalid on_rejected '${step.on_rejected}'. Must be 'fail', 'stop', '__END__', or a valid step_id`,
+          { ...stepContext, invalid_value: step.on_rejected }
+        );
+      }
+    } else if (Array.isArray(step.on_rejected)) {
+      normalizeBranchTargets(step.on_rejected).forEach((target) => {
+        if (['fail', 'stop'].includes(target)) {
+          result.addError(
+            ErrorCodes.APPROVAL_INVALID_ON_REJECTED,
+            `Approval step ${step.step_id} on_rejected array contains scalar sentinel '${target}'`,
+            { ...stepContext, target }
+          );
+        } else if (target !== STEP_END && !allStepIds.has(target)) {
+          result.addError(
+            ErrorCodes.APPROVAL_INVALID_ON_REJECTED,
+            `Approval step ${step.step_id} references non-existent step '${target}' in on_rejected`,
+            { ...stepContext, target }
+          );
+        }
+      });
     }
   }
 
-  // MANDATORY: on_timeout must be explicitly defined
-  if (!step.on_timeout) {
+  // MANDATORY: on_timeout must be explicitly defined. Same shape rule as
+  // on_rejected — sentinels are scalar-only.
+  if (step.on_timeout === undefined || step.on_timeout === null || step.on_timeout === '') {
     result.addError(
       ErrorCodes.APPROVAL_MISSING_ON_TIMEOUT,
       `Approval step ${step.step_id} MUST define 'on_timeout'. No default behavior allowed. Valid values: ${VALID_APPROVAL_TIMEOUT_BEHAVIORS.join(', ')}, '__END__', or a valid step_id`,
       { ...stepContext, rule: 'EXPLICIT_TIMEOUT_BEHAVIOR', valid_values: [...VALID_APPROVAL_TIMEOUT_BEHAVIORS, STEP_END] }
     );
-  } else {
+  } else if (typeof step.on_timeout === 'string') {
     const isValidBehavior = VALID_APPROVAL_TIMEOUT_BEHAVIORS.includes(step.on_timeout);
     const isValidStepRef = allStepIds.has(step.on_timeout);
     const isEnd = step.on_timeout === STEP_END;
-
     if (!isValidBehavior && !isValidStepRef && !isEnd) {
       result.addError(
         ErrorCodes.APPROVAL_INVALID_ON_TIMEOUT,
@@ -465,6 +507,22 @@ function validateApprovalStep(step, allStepIds, result) {
         { ...stepContext, invalid_value: step.on_timeout, valid_values: [...VALID_APPROVAL_TIMEOUT_BEHAVIORS, STEP_END] }
       );
     }
+  } else if (Array.isArray(step.on_timeout)) {
+    normalizeBranchTargets(step.on_timeout).forEach((target) => {
+      if (VALID_APPROVAL_TIMEOUT_BEHAVIORS.includes(target)) {
+        result.addError(
+          ErrorCodes.APPROVAL_INVALID_ON_TIMEOUT,
+          `Approval step ${step.step_id} on_timeout array contains scalar sentinel '${target}'`,
+          { ...stepContext, target }
+        );
+      } else if (target !== STEP_END && !allStepIds.has(target)) {
+        result.addError(
+          ErrorCodes.APPROVAL_INVALID_ON_TIMEOUT,
+          `Approval step ${step.step_id} references non-existent step '${target}' in on_timeout`,
+          { ...stepContext, target }
+        );
+      }
+    });
   }
 }
 
@@ -512,32 +570,32 @@ function detectCircularReferences(steps, result) {
   // Track all visited steps (for efficiency)
   const allVisited = new Set();
 
-  // Helper to get all next steps from a given step
+  // Helper to get all next steps from a given step. Each branch field accepts
+  // string (legacy) or string[] (fan-out). normalizeBranchTargets handles
+  // both; we filter out __END__ and any unknown step refs (the latter are
+  // flagged separately by validateStep).
   function getNextSteps(step) {
-    const nextSteps = [];
+    const expand = (raw) =>
+      normalizeBranchTargets(raw).filter((t) => t !== STEP_END && stepMap.has(t));
 
     if (step.type === 'condition') {
-      if (step.on_true && step.on_true !== STEP_END) {
-        nextSteps.push(step.on_true);
-      }
-      if (step.on_false && step.on_false !== STEP_END) {
-        nextSteps.push(step.on_false);
-      }
-    } else if (step.type === 'approval') {
-      if (step.on_approved && step.on_approved !== STEP_END) {
-        nextSteps.push(step.on_approved);
-      }
-      if (step.on_rejected && step.on_rejected !== STEP_END && stepMap.has(step.on_rejected)) {
-        nextSteps.push(step.on_rejected);
-      }
-      if (step.on_timeout && step.on_timeout !== STEP_END && stepMap.has(step.on_timeout)) {
-        nextSteps.push(step.on_timeout);
-      }
-    } else if (step.on_success?.behavior === 'goto' && step.on_success.step_id !== STEP_END) {
-      nextSteps.push(step.on_success.step_id);
+      return [...expand(step.on_true), ...expand(step.on_false)];
     }
-
-    return nextSteps;
+    if (step.type === 'approval') {
+      return [
+        ...expand(step.on_approved),
+        // on_rejected / on_timeout may also be scalar sentinels ('fail',
+        // 'stop', etc.) — expand() filters those out via stepMap.has check.
+        ...expand(step.on_rejected),
+        ...expand(step.on_timeout),
+      ];
+    }
+    if (step.on_success?.behavior === 'goto') {
+      return expand(step.on_success.step_ids ?? step.on_success.step_id);
+    }
+    // For other step types (action, enrichment, notification), follow
+    // on_success / on_complete which may also fan out.
+    return [...expand(step.on_success), ...expand(step.on_complete)];
   }
 
   // DFS to detect cycles

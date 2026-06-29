@@ -28,6 +28,7 @@ import {
 } from '../services/case-service.js';
 import logger from '../utils/logger.js';
 import { requireRole } from '../middleware/auth.js';
+import { logAction, actorFromReq } from '../services/audit-service.js';
 
 const router = express.Router();
 
@@ -173,6 +174,15 @@ router.post('/cases/from-execution/:execution_id', async (req, res) => {
       req.body,
       userId
     );
+    logAction({
+      action: 'create',
+      resource_type: 'case',
+      resource_id: String(caseDoc?._id || caseDoc?.case_id || ''),
+      resource_name: caseDoc?.title || `Case from execution ${req.params.execution_id}`,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { execution_id: req.params.execution_id, severity: caseDoc?.severity, priority: caseDoc?.priority },
+    }).catch(() => {});
     res.status(201).json(caseDoc);
   } catch (error) {
     if (error.message?.includes('not found')) {
@@ -199,6 +209,15 @@ router.put('/cases/:id', requireRole('admin', 'engineer', 'senior_analyst'), asy
   try {
     const userId = req.user?.email || 'analyst';
     const caseDoc = await updateCase(req.params.id, req.body, userId);
+    logAction({
+      action: 'update',
+      resource_type: 'case',
+      resource_id: req.params.id,
+      resource_name: caseDoc?.title || req.params.id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { fields_changed: Object.keys(req.body || {}) },
+    }).catch(() => {});
     res.json(caseDoc);
   } catch (error) {
     logger.error('Error updating case:', error);
@@ -223,6 +242,15 @@ router.patch('/cases/:id/status', async (req, res) => {
 
     const userId = req.user?.email || 'analyst';
     const caseDoc = await transitionCaseStatus(req.params.id, status, userId, reason);
+    logAction({
+      action: 'update',
+      resource_type: 'case',
+      resource_id: req.params.id,
+      resource_name: caseDoc?.title || req.params.id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { status_transition_to: status, reason: reason || null },
+    }).catch(() => {});
     res.json(caseDoc);
   } catch (error) {
     logger.error('Error transitioning case status:', error);
@@ -246,6 +274,15 @@ router.patch('/cases/:id/assign', async (req, res) => {
 
     const userId = req.user?.email || 'analyst';
     const caseDoc = await assignCase(req.params.id, assigned_to, userId);
+    logAction({
+      action: 'update',
+      resource_type: 'case',
+      resource_id: req.params.id,
+      resource_name: caseDoc?.title || req.params.id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { assigned_to },
+    }).catch(() => {});
     res.json(caseDoc);
   } catch (error) {
     logger.error('Error assigning case:', error);
@@ -269,6 +306,15 @@ router.post('/cases/:id/link-execution/:execution_id', async (req, res) => {
       req.params.execution_id,
       userId
     );
+    logAction({
+      action: 'update',
+      resource_type: 'case',
+      resource_id: req.params.id,
+      resource_name: caseDoc?.title || req.params.id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { link_execution: req.params.execution_id },
+    }).catch(() => {});
     res.json(caseDoc);
   } catch (error) {
     logger.error('Error linking execution to case:', error);
@@ -288,6 +334,15 @@ router.delete('/cases/:id/unlink-execution/:execution_id', requireRole('admin', 
       req.params.execution_id,
       userId
     );
+    logAction({
+      action: 'update',
+      resource_type: 'case',
+      resource_id: req.params.id,
+      resource_name: caseDoc?.title || req.params.id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { unlink_execution: req.params.execution_id },
+    }).catch(() => {});
     res.json(caseDoc);
   } catch (error) {
     logger.error('Error unlinking execution from case:', error);
@@ -320,6 +375,15 @@ router.post('/cases/:id/evidence', async (req, res) => {
     const userId = req.user?.email || 'analyst';
     const evidence = { type, name, description, content, metadata };
     const caseDoc = await addEvidenceToCase(req.params.id, evidence, userId);
+    logAction({
+      action: 'update',
+      resource_type: 'case',
+      resource_id: req.params.id,
+      resource_name: caseDoc?.title || req.params.id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { evidence_added: { type, name } },
+    }).catch(() => {});
     res.json(caseDoc);
   } catch (error) {
     logger.error('Error adding evidence to case:', error);
@@ -354,6 +418,15 @@ router.post('/cases/:id/comments', async (req, res) => {
       { content, comment_type, visibility, metadata },
       userId
     );
+    logAction({
+      action: 'update',
+      resource_type: 'case',
+      resource_id: req.params.id,
+      resource_name: req.params.id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { comment_added: { comment_type: comment_type || 'note', visibility: visibility || 'internal' } },
+    }).catch(() => {});
     res.status(201).json(comment);
   } catch (error) {
     logger.error('Error adding case comment:', error);

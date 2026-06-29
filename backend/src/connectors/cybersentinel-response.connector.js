@@ -91,6 +91,7 @@ const AR_COMMANDS = {
   isolate_host: 'soar-isolate-host0',
   kill_process: 'soar-kill-process0',
   disable_user: 'soar-disable-user0',
+  delete_file:  'soar-delete-file0',
 };
 
 function commandForOS(action, os) {
@@ -734,6 +735,87 @@ export async function disable_user({ agent_id, username, _simulate }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DELETE_FILE — hard-delete a single file on the target agent
+// ═══════════════════════════════════════════════════════════════════════════════
+// Wraps the soar-delete-file0 / win_soar-delete-file0 AR commands. Per the
+// 2026 design decision the AGENT script applies NO path-safety list — the
+// operator is responsible for the file path. Connector still does basic
+// input shape validation (absolute path, no shell metacharacters on Linux).
+
+export async function delete_file({ agent_id, file_path, _simulate }) {
+  const timestamp = new Date().toISOString();
+
+  const cleanAgentId = normalizeAgentId(agent_id);
+  if (!cleanAgentId) {
+    return {
+      success: false,
+      error: 'agent_id is required for delete_file',
+      details: { code: 'INVALID_INPUT' },
+    };
+  }
+  const cleanFilePath = (file_path === undefined || file_path === null) ? '' : String(file_path).trim();
+  if (!cleanFilePath) {
+    return {
+      success: false,
+      agent_id: cleanAgentId,
+      action: 'delete_file',
+      error: 'file_path is required for delete_file',
+      details: { code: 'INVALID_INPUT' },
+    };
+  }
+
+  const agentReject = validateAgentId(cleanAgentId, 'delete_file');
+  if (agentReject) return agentReject;
+
+  if (_simulate) {
+    logger.info(`[CyberSentinelResponse] SIMULATION: Would delete file ${cleanFilePath} on ${cleanAgentId}`);
+    return {
+      success: true,
+      agent_id: cleanAgentId,
+      action: 'delete_file',
+      file_path: cleanFilePath,
+      timestamp,
+      enforced_by: 'CyberSentinel Manager',
+      _simulated: true,
+    };
+  }
+
+  try {
+    const result = await dispatchAR({
+      action: 'delete_file',
+      args: [cleanFilePath],
+      agentId: cleanAgentId,
+    });
+
+    logger.info(`[CyberSentinelResponse] delete_file dispatched for ${cleanAgentId} (cmd=${result.command}, file=${cleanFilePath})`);
+
+    return {
+      success: true,
+      agent_id: cleanAgentId,
+      action: 'delete_file',
+      file_path: cleanFilePath,
+      os: result.os,
+      ar_command: result.command,
+      timestamp,
+      enforced_by: 'CyberSentinel Manager',
+      details: result.data?.data || null,
+      _simulated: false,
+    };
+  } catch (error) {
+    const classified = classifyError(error, 'delete_file');
+    logger.error(`[CyberSentinelResponse] delete_file failed for ${cleanAgentId}: ${classified.message}`);
+    return {
+      success: false,
+      agent_id: cleanAgentId,
+      action: 'delete_file',
+      file_path: cleanFilePath,
+      error: classified.message,
+      details: { code: classified.code, retryable: classified.retryable },
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // CONNECTOR IMPLEMENTATION (Connector Contract Interface)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -774,6 +856,17 @@ export const cybersentinelResponseConnector = {
         username: 'string',
       },
       // ADD-only. Unlock is a manual SOC operator task, not a SOAR step.
+    },
+    delete_file: {
+      required_fields: ['agent_id', 'file_path'],
+      optional_fields: [],
+      field_types: {
+        // agent_id intentionally untyped (see isolate_host note).
+        file_path: 'string',
+      },
+      // ADD-only. Hard delete (rm -f / Remove-Item -Force). No undo.
+      // Agent script enforces: absolute path, no shell metacharacters,
+      // single-file only (refuses directories).
     },
   },
 
@@ -819,6 +912,19 @@ export const cybersentinelResponseConnector = {
         _simulated: 'boolean',
       },
     },
+    delete_file: {
+      output_fields: {
+        success: 'boolean',
+        agent_id: 'string',
+        action: 'string',
+        file_path: 'string',
+        os: 'string',
+        ar_command: 'string',
+        timestamp: 'string',
+        enforced_by: 'string',
+        _simulated: 'boolean',
+      },
+    },
   },
 
   async execute(action, inputs, config) {
@@ -850,9 +956,16 @@ export const cybersentinelResponseConnector = {
           _simulate: isSimulation,
         });
 
+      case 'delete_file':
+        return await delete_file({
+          agent_id: inputs.agent_id,
+          file_path: inputs.file_path,
+          _simulate: isSimulation,
+        });
+
       default:
         throw Object.assign(
-          new Error(`Unknown action: ${action}. Supported: isolate_host, kill_process, disable_user`),
+          new Error(`Unknown action: ${action}. Supported: isolate_host, kill_process, disable_user, delete_file`),
           { code: 'INVALID_ACTION', retryable: false }
         );
     }

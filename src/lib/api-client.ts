@@ -518,12 +518,34 @@ class APIClient {
   // AUDIT LOGS
   // ============================================================================
 
-  async getAuditLogs(params?: { limit?: number }) {
+  async getAuditLogs(params?: {
+    limit?: number;
+    offset?: number;
+    actor_email?: string;
+    action?: string;
+    resource_type?: string;
+    resource_id?: string;
+    outcome?: 'success' | 'failure' | 'partial';
+    start_date?: string;   // ISO datetime
+    end_date?: string;     // ISO datetime
+  }) {
     const searchParams = new URLSearchParams();
-    if (params?.limit) searchParams.append('limit', params.limit.toString());
+    if (params?.limit !== undefined)        searchParams.append('limit', String(params.limit));
+    if (params?.offset !== undefined)       searchParams.append('offset', String(params.offset));
+    if (params?.actor_email)                searchParams.append('actor_email', params.actor_email);
+    if (params?.action)                     searchParams.append('action', params.action);
+    if (params?.resource_type)              searchParams.append('resource_type', params.resource_type);
+    if (params?.resource_id)                searchParams.append('resource_id', params.resource_id);
+    if (params?.outcome)                    searchParams.append('outcome', params.outcome);
+    if (params?.start_date)                 searchParams.append('start_date', params.start_date);
+    if (params?.end_date)                   searchParams.append('end_date', params.end_date);
 
     const query = searchParams.toString();
-    return this.request<any[]>(`/audit${query ? `?${query}` : ''}`);
+    // Backend returns {data, total, limit, offset} — unwrap to a list at the call site.
+    const resp = await this.request<{ data: any[]; total: number; limit: number; offset: number }>(
+      `/audit${query ? `?${query}` : ''}`
+    );
+    return resp;
   }
 
   // ============================================================================

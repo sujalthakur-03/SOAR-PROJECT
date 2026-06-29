@@ -24,6 +24,7 @@
  *   node backend/scripts/ar-dispatch.js kill_process    --agent 005 --pid 12345
  *   node backend/scripts/ar-dispatch.js kill_process    --agent 005 --name sleep
  *   node backend/scripts/ar-dispatch.js disable_user    --agent 005 --user soartest-linux
+ *   node backend/scripts/ar-dispatch.js delete_file     --agent 005 --file /tmp/malware.bin
  *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005
  *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005 --release-after-minutes 30
  *   node backend/scripts/ar-dispatch.js isolate_host    --agent 005 --release-after-seconds 60
@@ -66,6 +67,7 @@ function previewPutBody(action, inputs) {
     isolate_host: 'soar-isolate-host0',
     kill_process: 'soar-kill-process0',
     disable_user: 'soar-disable-user0',
+    delete_file:  'soar-delete-file0',
   };
   const isWin = String(inputs.agent_id) === '007';   // hint for preview only
   const base = baseCommands[action];
@@ -78,6 +80,8 @@ function previewPutBody(action, inputs) {
     argsArr = inputs.pid ? ['pid', String(inputs.pid)] : ['name', String(inputs.process_name)];
   } else if (action === 'disable_user') {
     argsArr = [String(inputs.username)];
+  } else if (action === 'delete_file') {
+    argsArr = [String(inputs.file_path)];
   } else if (action === 'isolate_host') {
     // API-dispatched AR does NOT inherit manager ossec.conf <extra_args>.
     // Manager IP is passed explicitly in the API body's arguments array.
@@ -113,10 +117,11 @@ function previewPutBody(action, inputs) {
 
 async function main() {
   const [, , action, ...rest] = process.argv;
-  if (!action || !['kill_process', 'disable_user', 'isolate_host'].includes(action)) {
+  if (!action || !['kill_process', 'disable_user', 'isolate_host', 'delete_file'].includes(action)) {
     console.error('Usage: ar-dispatch.js <action> [flags]');
-    console.error('  action: kill_process | disable_user | isolate_host');
-    console.error('Flags: --agent <id>  --pid <n>  --name <s>  --user <s>');
+    console.error('  action: kill_process | disable_user | isolate_host | delete_file');
+    console.error('Flags: --agent <id>  --pid <n>  --name <s>  --user <s>  --file <path>');
+    console.error('       --release-after-minutes <N>  (isolate_host only)');
     console.error('       --simulate         use the connector simulation path');
     console.error('       --dry-run-preview  print the PUT body shape only, no network');
     process.exit(2);
@@ -138,6 +143,10 @@ async function main() {
   if (action === 'disable_user') {
     if (!args.user) { console.error('--user <name> required for disable_user'); process.exit(2); }
     inputs.username = String(args.user);
+  }
+  if (action === 'delete_file') {
+    if (!args.file) { console.error('--file <path> required for delete_file'); process.exit(2); }
+    inputs.file_path = String(args.file);
   }
   if (action === 'isolate_host') {
     if (args['release-after-minutes'] !== undefined) {

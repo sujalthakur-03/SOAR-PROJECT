@@ -44,6 +44,7 @@ import {
   deletePlaybook
 } from '../services/playbook-service-v2.js';
 import { ValidationError } from '../validators/playbook-validator.js';
+import { logAction, actorFromReq } from '../services/audit-service.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
@@ -129,6 +130,15 @@ router.post('/playbooks', async (req, res) => {
     const playbook = await createPlaybook(req.body, userId);
 
     logger.info(`[PlaybookRoutes] Created playbook ${playbook.playbook_id} by ${userId}`);
+    logAction({
+      action: 'create',
+      resource_type: 'playbook',
+      resource_id: playbook.playbook_id,
+      resource_name: playbook.name,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { version: playbook.version, enabled: playbook.enabled },
+    }).catch(() => {});
 
     res.status(201).json(playbook);
   } catch (error) {
@@ -309,6 +319,18 @@ router.put('/playbooks/:playbook_id', async (req, res) => {
     const updatedPlaybook = await updatePlaybook(playbook_id, req.body, userId);
 
     logger.info(`[PlaybookRoutes] Updated playbook ${playbook_id} to version ${updatedPlaybook.version} by ${userId}`);
+    logAction({
+      action: 'update',
+      resource_type: 'playbook',
+      resource_id: playbook_id,
+      resource_name: updatedPlaybook.name,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: {
+        new_version: updatedPlaybook.version,
+        change_summary: req.body.change_summary || null,
+      },
+    }).catch(() => {});
 
     res.json(updatedPlaybook);
   } catch (error) {
@@ -363,6 +385,15 @@ router.patch('/playbooks/:playbook_id/toggle', async (req, res) => {
     const playbook = await togglePlaybook(playbook_id, enabled, version);
 
     logger.info(`[PlaybookRoutes] Toggled playbook ${playbook_id} version ${playbook.version} to enabled=${enabled}`);
+    logAction({
+      action: 'update',                                          // toggle is a kind of update
+      resource_type: 'playbook',
+      resource_id: playbook_id,
+      resource_name: playbook.name,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { toggled_to_enabled: enabled, version: playbook.version },
+    }).catch(() => {});
 
     res.json(playbook);
   } catch (error) {
@@ -396,6 +427,15 @@ router.delete('/playbooks/:playbook_id', async (req, res) => {
     const result = await deletePlaybook(playbook_id);
 
     logger.info(`[PlaybookRoutes] Deleted playbook ${playbook_id}`);
+    logAction({
+      action: 'delete',
+      resource_type: 'playbook',
+      resource_id: playbook_id,
+      resource_name: playbook_id,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { versions_deleted: result?.deletedCount },
+    }).catch(() => {});
 
     res.json({
       ...result,
@@ -526,6 +566,15 @@ router.post('/playbooks/import', async (req, res) => {
     const disabledPlaybook = await getPlaybook(playbook.playbook_id, playbook.version);
 
     logger.info(`[PlaybookRoutes] Imported playbook as ${playbook.playbook_id} by ${userId}`);
+    logAction({
+      action: 'create',                                   // import is a kind of create
+      resource_type: 'playbook',
+      resource_id: playbook.playbook_id,
+      resource_name: playbook.name,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { imported: true, steps: importData.dsl.steps.length },
+    }).catch(() => {});
 
     res.status(201).json(disabledPlaybook || { ...playbook, enabled: false });
   } catch (error) {
@@ -583,6 +632,15 @@ router.post('/playbooks/:playbook_id/clone', async (req, res) => {
     const disabledClone = await getPlaybook(cloned.playbook_id, cloned.version);
 
     logger.info(`[PlaybookRoutes] Cloned playbook ${playbook_id} as ${cloned.playbook_id} by ${userId}`);
+    logAction({
+      action: 'create',                                   // clone is a kind of create
+      resource_type: 'playbook',
+      resource_id: cloned.playbook_id,
+      resource_name: cloned.name,
+      ...actorFromReq(req),
+      outcome: 'success',
+      details: { cloned_from: playbook_id },
+    }).catch(() => {});
 
     res.status(201).json(disabledClone || { ...cloned, enabled: false });
   } catch (error) {

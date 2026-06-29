@@ -16,6 +16,7 @@ via `PUT /active-response`.
 | isolate-host | `soar-isolate-host.sh`      | `soar-isolate-host.cmd`      | `soar-isolate-host.ps1`    |
 | kill-process | `soar-kill-process.sh`      | `soar-kill-process.cmd`      | `soar-kill-process.ps1`    |
 | disable-user | `soar-disable-user.sh`      | `soar-disable-user.cmd`      | `soar-disable-user.ps1`    |
+| delete-file  | `soar-delete-file.sh`       | `soar-delete-file.cmd`       | `soar-delete-file.ps1`     |
 
 All scripts read the Wazuh AR JSON payload from `stdin` (v4.2+ calling
 convention) and fall back to positional arguments for legacy agents. They log
@@ -75,6 +76,7 @@ Wazuh ships for `route-null` / `win_route-null`):
 | isolate-host | `soar-isolate-host0`    | `win_soar-isolate-host0`    |
 | kill-process | `soar-kill-process0`    | `win_soar-kill-process0`    |
 | disable-user | `soar-disable-user0`    | `win_soar-disable-user0`    |
+| delete-file  | `soar-delete-file0`     | `win_soar-delete-file0`     |
 
 The trailing `0` follows Wazuh's custom-command convention (signals "no
 built-in counterpart"). The `soar-` prefix puts SOAR-owned actions in their
@@ -93,7 +95,7 @@ to `win_soar-X0`.
 **Linux agents:**
 
 ```bash
-sudo cp soar-isolate-host.sh soar-kill-process.sh soar-disable-user.sh \
+sudo cp soar-isolate-host.sh soar-kill-process.sh soar-disable-user.sh soar-delete-file.sh \
     /var/ossec/active-response/bin/
 sudo chown root:wazuh /var/ossec/active-response/bin/soar-*.sh
 sudo chmod 750 /var/ossec/active-response/bin/soar-*.sh
@@ -108,6 +110,8 @@ copy soar-kill-process.cmd  "C:\Program Files (x86)\ossec-agent\active-response\
 copy soar-kill-process.ps1  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
 copy soar-disable-user.cmd  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
 copy soar-disable-user.ps1  "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-delete-file.cmd   "C:\Program Files (x86)\ossec-agent\active-response\bin\"
+copy soar-delete-file.ps1   "C:\Program Files (x86)\ossec-agent\active-response\bin\"
 ```
 
 For multi-agent fleets, use Wazuh's shared folder
@@ -143,6 +147,12 @@ the actual manager IP (or comma-separated list for HA).
     <timeout_allowed>no</timeout_allowed>
   </command>
 
+  <command>
+    <name>soar-delete-file0</name>
+    <executable>soar-delete-file.sh</executable>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
   <!-- ============== Windows command definitions ============== -->
 
   <command>
@@ -164,6 +174,12 @@ the actual manager IP (or comma-separated list for HA).
     <timeout_allowed>no</timeout_allowed>
   </command>
 
+  <command>
+    <name>win_soar-delete-file0</name>
+    <executable>soar-delete-file.cmd</executable>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
   <!-- ============== Active Response bindings ============== -->
   <!-- No <rules_id> => commands fire ONLY on manual SOAR dispatch -->
 
@@ -180,6 +196,10 @@ the actual manager IP (or comma-separated list for HA).
     <command>soar-disable-user0</command>
     <location>local</location>
   </active-response>
+  <active-response>
+    <command>soar-delete-file0</command>
+    <location>local</location>
+  </active-response>
 
   <active-response>
     <command>win_soar-isolate-host0</command>
@@ -192,6 +212,10 @@ the actual manager IP (or comma-separated list for HA).
   </active-response>
   <active-response>
     <command>win_soar-disable-user0</command>
+    <location>local</location>
+  </active-response>
+  <active-response>
+    <command>win_soar-delete-file0</command>
     <location>local</location>
   </active-response>
 
