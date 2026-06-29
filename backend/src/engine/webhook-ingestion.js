@@ -749,6 +749,9 @@ async function createHardenedExecution(playbook, alertPayload, webhookId, trigge
     description: playbook.description,
     shadow_mode: playbook.dsl?.shadow_mode || false,
     steps: playbookSteps,
+    // Trigger forwarded so the engine can seed pending IDs from
+    // trigger.next_steps (multi-target trigger fan-out).
+    trigger: playbook.dsl?.trigger || playbook.trigger || null,
     version: playbook.version,
     enabled: playbook.enabled
   };

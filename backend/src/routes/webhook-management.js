@@ -771,6 +771,9 @@ router.post('/webhooks/:webhook_id/:secret', async (req, res) => {
           description: playbook.description,
           shadow_mode: playbook.dsl?.shadow_mode || playbook.shadow_mode || false,
           steps: playbookSteps,
+          // Trigger forwarded so the engine can seed pending IDs from
+          // trigger.next_steps (multi-target trigger fan-out).
+          trigger: playbook.dsl?.trigger || playbook.trigger || null,
           version: playbook.version,
           enabled: playbook.enabled ?? true
         };

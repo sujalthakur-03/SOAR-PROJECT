@@ -795,6 +795,9 @@ router.post('/executions/trigger', async (req, res) => {
       description: playbookObj.description,
       shadow_mode: playbookObj.dsl?.shadow_mode || false,
       steps: playbookSteps,
+      // Trigger forwarded so the engine can seed pending IDs from
+      // trigger.next_steps (multi-target trigger fan-out).
+      trigger: playbookObj.dsl?.trigger || playbookObj.trigger || null,
       version: playbookObj.version,
       enabled: playbookObj.enabled
     };

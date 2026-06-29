@@ -328,9 +328,27 @@ export class ExecutionEngine {
     const stepsById = new Map(steps.map((s) => [s.step_id, s]));
 
     // Pending queue: step IDs waiting to launch.
-    const pendingIds = isResume
-      ? [...seedStepIds]
-      : (steps.length > 0 ? [steps[0].step_id] : []);
+    //
+    // Initial seed precedence on a fresh execution (not a resume):
+    //   1. trigger.next_steps from the playbook DSL (frontend-saved, may
+    //      contain multiple step_ids for multi-target trigger fan-out).
+    //   2. trigger.next_step (singular legacy alias).
+    //   3. steps[0].step_id — original "always start from first array entry"
+    //      behavior. Preserved for backward compat with playbooks that have
+    //      no trigger.next_steps yet.
+    let pendingIds;
+    if (isResume) {
+      pendingIds = [...seedStepIds];
+    } else {
+      const triggerSeeds = normalizeBranchTargets(
+        this.playbook.trigger?.next_steps ?? this.playbook.trigger?.next_step
+      ).filter((id) => stepsById.has(id));
+      if (triggerSeeds.length > 0) {
+        pendingIds = triggerSeeds;
+      } else {
+        pendingIds = steps.length > 0 ? [steps[0].step_id] : [];
+      }
+    }
 
     // In-flight steps: Map<step_id, Promise> for the race loop.
     const runningPromises = new Map();

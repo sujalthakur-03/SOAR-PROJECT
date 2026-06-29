@@ -131,6 +131,21 @@ function convertNodesToDSL(
     edgeMap.set(edge.source, existing);
   });
 
+  // Capture the trigger's outgoing edges as entry points into the step graph.
+  // Without this, the load side has no way to know which step(s) the trigger
+  // connects to, and falls back to "first step in array" — losing all
+  // user-drawn trigger→step connections after save→reload.
+  // Stored at trigger.next_steps as string[] of step_ids (same wire format as
+  // step.on_success arrays for consistency).
+  if (triggerNode) {
+    const triggerOutgoing = edgeMap.get(triggerNode.id) || [];
+    const stepIdSet = new Set(stepNodes.map((n) => n.id));
+    const triggerTargets = triggerOutgoing
+      .map((e) => e.target)
+      .filter((t) => stepIdSet.has(t));   // only keep edges to step nodes
+    trigger.next_steps = triggerTargets;
+  }
+
   const endNodeIds = new Set(
     nodes
       .filter((n) => (n.data as PlaybookNodeData).stepType === 'end')
@@ -393,21 +408,30 @@ function convertDSLToNodes(
   });
 
   // Second pass: create edges based on step transitions
-  // First, connect trigger to first step
-  if (steps.length > 0) {
-    const firstStep = steps[0] as DSLStep;
-    const firstNodeId = stepIdToNodeId.get(firstStep.step_id);
-    if (firstNodeId) {
+
+  // Trigger → step edges. Reads trigger.next_steps (string[] of step_ids)
+  // saved by convertNodesToDSL. If absent or empty (legacy / freshly imported
+  // playbooks with no trigger.next_steps field), fall back to "connect
+  // trigger to first step in array" — the original single-target behavior.
+  const triggerNextRaw = (triggerConfig.next_steps ?? triggerConfig.next_step);
+  const triggerNextSteps = toTargetArray(triggerNextRaw as BranchTargets | undefined | null);
+  const triggerTargetStepIds: string[] =
+    triggerNextSteps.length > 0
+      ? triggerNextSteps
+      : (steps.length > 0 ? [(steps[0] as DSLStep).step_id] : []);
+  triggerTargetStepIds.forEach((stepId, idx) => {
+    const targetNodeId = stepIdToNodeId.get(stepId);
+    if (targetNodeId) {
       edges.push({
-        id: `e-trigger-${firstNodeId}`,
+        id: `e-trigger-${targetNodeId}-${idx}`,
         source: triggerNodeId,
-        target: firstNodeId,
+        target: targetNodeId,
         type: 'smoothstep',
         animated: true,
         style: { strokeWidth: 2 },
       });
     }
-  }
+  });
 
   // Helper to resolve target step_id to node_id
   const resolveTargetNodeId = (targetStepId: string | undefined | null): string | null => {
